@@ -5,6 +5,7 @@
 
 #include "BlackjackActivity.h"
 #include "MappedInputManager.h"
+#include "MinesweeperActivity.h"
 #include "SketchActivity.h"
 #include "SnakeActivity.h"
 #include "components/UITheme.h"
@@ -31,6 +32,9 @@ void PlayMenuActivity::open() {
       break;
     case 1:
       game = makeUniqueNoThrow<BlackjackActivity>(renderer, mappedInput);
+      break;
+    case 3:
+      game = makeUniqueNoThrow<MinesweeperActivity>(renderer, mappedInput);
       break;
     default:
       game = makeUniqueNoThrow<SketchActivity>(renderer, mappedInput);
@@ -80,6 +84,9 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
       renderer.drawText(SMALL_FONT_ID, x + 14, y + 16, "K", true, EpdFontFamily::BOLD);
       break;
     }
+    case 3:
+      MinesweeperActivity::drawMenuIcon(renderer, x, y, size);
+      break;
     default: {
       // A quick pencil face.
       const int c = size / 2;
@@ -98,9 +105,9 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
 void PlayMenuActivity::renderItem(const int index, const int x, const int y, const int width,
                                   const int height) const {
   static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_BLACKJACK,
-                                                StrId::STR_PLAY_SKETCH};
+                                                StrId::STR_PLAY_SKETCH, StrId::STR_PLAY_MINES};
   static constexpr StrId DESCRIPTIONS[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE_DESC, StrId::STR_PLAY_BLACKJACK_DESC,
-                                                     StrId::STR_PLAY_SKETCH_DESC};
+                                                     StrId::STR_PLAY_SKETCH_DESC, StrId::STR_PLAY_MINES_DESC};
   const bool focused = index == selected;
   renderer.drawRoundedRect(x, y, width, height, focused ? FOCUS_FRAME : 1, 10, true);
   const int glyphY = y + (height - GLYPH) / 2;
