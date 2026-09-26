@@ -4,6 +4,8 @@
 #include <Memory.h>
 
 #include "BlackjackActivity.h"
+#include "Game2048Activity.h"
+#include "Game2048Art.h"
 #include "MappedInputManager.h"
 #include "SketchActivity.h"
 #include "SnakeActivity.h"
@@ -36,6 +38,9 @@ void PlayMenuActivity::open() {
       break;
     case 3:
       game = makeUniqueNoThrow<SokobanActivity>(renderer, mappedInput);
+      break;
+    case 4:
+      game = makeUniqueNoThrow<Game2048Activity>(renderer, mappedInput);
       break;
     default:
       game = makeUniqueNoThrow<SketchActivity>(renderer, mappedInput);
@@ -101,6 +106,15 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
       }
       break;
     }
+    case 4: {
+      // A 2x2 of tiles climbing the texture ladder.
+      constexpr int T = 32, G = 4;
+      static constexpr uint8_t EXPS[4] = {1, 4, 7, 11};
+      for (int i = 0; i < 4; i++) {
+        g2048::drawTile(renderer, x + 2 + (i % 2) * (T + G), y + 2 + (i / 2) * (T + G), T, EXPS[i], false);
+      }
+      break;
+    }
     default: {
       // A quick pencil face.
       const int c = size / 2;
@@ -116,12 +130,12 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
   }
 }
 
-void PlayMenuActivity::renderItem(const int index, const int x, const int y, const int width,
-                                  const int height) const {
-  static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_BLACKJACK,
-                                                StrId::STR_PLAY_SKETCH, StrId::STR_PLAY_SOKOBAN};
+void PlayMenuActivity::renderItem(const int index, const int x, const int y, const int width, const int height) const {
+  static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_BLACKJACK, StrId::STR_PLAY_SKETCH,
+                                               StrId::STR_PLAY_SOKOBAN, StrId::STR_PLAY_2048};
   static constexpr StrId DESCRIPTIONS[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE_DESC, StrId::STR_PLAY_BLACKJACK_DESC,
-                                                     StrId::STR_PLAY_SKETCH_DESC, StrId::STR_PLAY_SOKOBAN_DESC};
+                                                     StrId::STR_PLAY_SKETCH_DESC, StrId::STR_PLAY_SOKOBAN_DESC,
+                                                     StrId::STR_PLAY_2048_DESC};
   const bool focused = index == selected;
   renderer.drawRoundedRect(x, y, width, height, focused ? FOCUS_FRAME : 1, 10, true);
   const int glyphY = y + (height - GLYPH) / 2;
