@@ -16,6 +16,8 @@ mkdir -p "$VOL/.crosspoint"
 [[ -f "$KEY" ]] && cp "$KEY" "$VOL/.crosspoint/stripe.json"
 # Extra SD content (e.g. sleep/ wallpapers) mirrored onto the card root.
 [[ -d "$REPO/sd-extra" ]] && rsync -r "$REPO/sd-extra/" "$VOL/"
+# The card's wallpapers mirror sd-extra/sleep exactly, so removed ones disappear too.
+[[ -d "$REPO/sd-extra/sleep" ]] && rsync -r --delete "$REPO/sd-extra/sleep/" "$VOL/sleep/"
 sync
 
 [[ "$(shasum "$FW" | cut -d' ' -f1)" == "$(shasum "$VOL/update.bin" | cut -d' ' -f1)" ]] \
