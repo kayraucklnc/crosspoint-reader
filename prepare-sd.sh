@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
-FW="$REPO/.pio/build/default/firmware.bin"
+FW="${FW:-$REPO/.pio/build/default/firmware.bin}"
 KEY="$REPO/fs_/.crosspoint/stripe.json"
 VOL="${1:-/Volumes/NO NAME}"
 
