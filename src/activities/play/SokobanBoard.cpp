@@ -10,7 +10,7 @@
 namespace sokoban {
 namespace {
 constexpr const char* PACK_PATH = "/.crosspoint/games/sokoban/levels.bin";
-constexpr int PACK_HEADER_FIXED = 7;  // "SKB1", u16 count, u8 name length
+constexpr int PACK_HEADER_FIXED = 7;  // "SKB1"/"SKB2", u16 count, u8 name length
 constexpr int LEVEL_HEADER = 6;       // u8 w, u8 h, u16 par moves, u16 par pushes
 constexpr int PUSH_BIT = 4;
 constexpr int DX[4] = {0, 1, 0, -1};
@@ -19,13 +19,14 @@ constexpr int DY[4] = {-1, 0, 1, 0};
 // Microban 1-3 by David W. Skinner, used when the SD pack is missing.
 struct BuiltIn {
   const char* xsb;
+  const char* solution;  // LURD, pushes in capitals
   uint16_t parMoves;
   uint16_t parPushes;
 };
 constexpr BuiltIn BUILT_IN[] = {
-    {"####|# .#|#  ###|#*@  #|#  $ #|#  ###|####", 33, 8},
-    {"######|#    #|# #@ #|# $* #|# .* #|#    #|######", 16, 3},
-    {"  ####|###  ####|#     $ #|# #  #$ #|# . .#@ #|#########", 41, 13},
+    {"####|# .#|#  ###|#*@  #|#  $ #|#  ###|####", "dlUrrrdLullddrUluRuulDrddrruLdlUU", 33, 8},
+    {"######|#    #|# #@ #|# $* #|# .* #|#    #|######", "rddLruulDuullddR", 16, 3},
+    {"  ####|###  ####|#     $ #|# #  #$ #|# . .#@ #|#########", "ruuLLLulDrrrrddlUruLLLddllluurRDrdLuuurDD", 41, 13},
 };
 constexpr int BUILT_IN_COUNT = sizeof(BUILT_IN) / sizeof(BUILT_IN[0]);
 
@@ -74,7 +75,72 @@ bool Board::finishLoad(const bool sawPlayer) {
     LOG_ERR("SOKO", "Malformed level: player %d, boxes %d, goals %d", sawPlayer, boxes, goals);
     return false;
   }
+  markDeadCells();
   return true;
+}
+
+// Pull analysis: a cell is live if a box there can be pushed onto some goal
+// with no other box in the way. Relaxation passes need no queue memory.
+void Board::markDeadCells() {
+  const int total = w * h;
+  for (int i = 0; i < total; i++) {
+    if (cells[i] & CELL_FLOOR) cells[i] = static_cast<uint8_t>(cells[i] | (cells[i] & CELL_GOAL ? 0 : CELL_DEAD));
+  }
+  const auto inside = [this](const int c) { return c >= 0 && (cells[c] & CELL_FLOOR) && !(cells[c] & CELL_WALL); };
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (int i = 0; i < total; i++) {
+      if (!inside(i) || (cells[i] & CELL_DEAD)) continue;
+      for (int d = 0; d < 4; d++) {
+        const int from = neighbour(i, static_cast<Dir>(d));
+        const int keeper = from < 0 ? -1 : neighbour(from, static_cast<Dir>(d));
+        if (inside(from) && inside(keeper) && (cells[from] & CELL_DEAD)) {
+          cells[from] &= static_cast<uint8_t>(~CELL_DEAD);
+          changed = true;
+        }
+      }
+    }
+  }
+}
+
+bool Board::walkable(const int cell) const {
+  return cell >= 0 && (cells[cell] & (CELL_FLOOR | CELL_WALL | CELL_BOX)) == CELL_FLOOR;
+}
+
+uint32_t Board::boxHash() const {
+  uint32_t hash = 0;
+  for (int i = 0; i < w * h; i++) {
+    if (!(cells[i] & CELL_BOX)) continue;
+    uint32_t x = static_cast<uint32_t>(i + 1) * 0x9E3779B1u;
+    x ^= x >> 15;
+    x *= 0x85EBCA77u;
+    x ^= x >> 13;
+    hash ^= x;
+  }
+  return hash;
+}
+
+// A box in a 2x2 block made only of walls and boxes can never move again.
+bool Board::frozenAt(const int cell) const {
+  const auto solid = [this](const int c) {
+    return c < 0 || !(cells[c] & CELL_FLOOR) || (cells[c] & (CELL_WALL | CELL_BOX));
+  };
+  for (int d = 0; d < 4; d++) {
+    const int a = neighbour(cell, static_cast<Dir>(d));
+    const int b = neighbour(cell, static_cast<Dir>((d + 1) % 4));
+    const int corner = a < 0 ? -1 : neighbour(a, static_cast<Dir>((d + 1) % 4));
+    if (solid(a) && solid(b) && solid(corner)) return true;
+  }
+  return false;
+}
+
+bool Board::stuck() const {
+  for (int i = 0; i < w * h; i++) {
+    if ((cells[i] & (CELL_BOX | CELL_GOAL)) != CELL_BOX) continue;
+    if ((cells[i] & CELL_DEAD) || frozenAt(i)) return true;
+  }
+  return false;
 }
 
 bool Board::loadCodes(const int width, const int height, const uint8_t* packed) {
@@ -167,8 +233,9 @@ int Board::neighbour(const int cell, const Dir dir) const {
 }
 
 uint8_t Board::visual(const int cell) const {
-  if (cell != player) return cells[cell];
-  return static_cast<uint8_t>(cells[cell] | CELL_PLAYER | (facing << FACING_SHIFT));
+  const uint8_t bits = cells[cell] & static_cast<uint8_t>(~CELL_DEAD);
+  if (cell != player) return bits;
+  return static_cast<uint8_t>(bits | CELL_PLAYER | (facing << FACING_SHIFT));
 }
 
 uint8_t Board::openSides(const int cell) const {
@@ -213,8 +280,15 @@ Board::Step Board::move(const Dir dir) {
   return pushed ? Step::PUSHED : Step::WALKED;
 }
 
-bool Board::undo() {
+bool Board::lastWasPush() const {
   if (historyCount == 0) return false;
+  const int last = (historyHead + HISTORY_MOVES - 1) % HISTORY_MOVES;
+  const uint8_t byte = history[last / 2];
+  return (((last % 2 == 0) ? byte >> 4 : byte & 0x0F) & PUSH_BIT) != 0;
+}
+
+Board::Step Board::undo() {
+  if (historyCount == 0) return Step::BLOCKED;
   historyHead = (historyHead + HISTORY_MOVES - 1) % HISTORY_MOVES;
   historyCount--;
   const uint8_t byte = history[historyHead / 2];
@@ -234,7 +308,7 @@ bool Board::undo() {
   if (from >= 0) player = static_cast<uint16_t>(from);
   if (moves > 0) moves--;
   facing = dir;
-  return true;
+  return (entry & PUSH_BIT) ? Step::PUSHED : Step::WALKED;
 }
 
 void LevelPack::open() {
@@ -247,10 +321,12 @@ void LevelPack::open() {
     return;
   }
   uint8_t head[PACK_HEADER_FIXED];
-  if (file.read(head, sizeof(head)) != static_cast<int>(sizeof(head)) || memcmp(head, "SKB1", 4) != 0) {
+  if (file.read(head, sizeof(head)) != static_cast<int>(sizeof(head)) ||
+      (memcmp(head, "SKB1", 4) != 0 && memcmp(head, "SKB2", 4) != 0)) {
     LOG_ERR("SOKO", "Bad level pack header");
     return;
   }
+  hasSolutions = head[3] == '2';
   const int count = readU16(head + 4);
   const int nameLength = std::min<int>(head[6], sizeof(packName) - 1);
   if (count == 0 || file.read(packName, nameLength) != nameLength) {
@@ -300,6 +376,52 @@ bool LevelPack::load(const int index, Board& board, uint16_t& parMoves, uint16_t
   parMoves = readU16(level + 2);
   parPushes = readU16(level + 4);
   return board.loadCodes(width, height, packed.get());
+}
+
+bool LevelPack::loadSolution(const int index, std::unique_ptr<uint8_t[]>& packed, int& moveCount) const {
+  moveCount = 0;
+  if (index < 0 || index >= levelCount) return false;
+  if (fallback) {
+    const char* lurd = BUILT_IN[index].solution;
+    const int n = static_cast<int>(strlen(lurd));
+    packed = makeUniqueNoThrow<uint8_t[]>((n + 3) / 4);
+    if (!packed) return false;
+    memset(packed.get(), 0, (n + 3) / 4);
+    for (int k = 0; k < n; k++) {
+      static constexpr char KEYS[] = "urdl";
+      const char* hit = strchr(KEYS, lurd[k] | 0x20);
+      const int dir = hit ? static_cast<int>(hit - KEYS) : 0;
+      packed[k / 4] |= static_cast<uint8_t>(dir << (6 - 2 * (k % 4)));
+    }
+    moveCount = n;
+    return true;
+  }
+  if (!hasSolutions) return false;
+  HalFile file;
+  if (!Storage.openFileForRead("SOKO", PACK_PATH, file)) return false;
+  uint8_t head[PACK_HEADER_FIXED];
+  uint8_t word[4];
+  uint8_t level[LEVEL_HEADER];
+  if (file.read(head, sizeof(head)) != static_cast<int>(sizeof(head)) ||
+      !file.seek(PACK_HEADER_FIXED + head[6] + 4 * static_cast<size_t>(index)) || file.read(word, 4) != 4 ||
+      !file.seek(readU32(word)) || file.read(level, sizeof(level)) != static_cast<int>(sizeof(level)) ||
+      !file.seekCur((level[0] * level[1] + 1) / 2) || file.read(word, 2) != 2) {
+    LOG_ERR("SOKO", "Level %d: no solution record", index);
+    return false;
+  }
+  const int n = readU16(word);
+  const int bytes = (n + 3) / 4;
+  packed = makeUniqueNoThrow<uint8_t[]>(bytes);
+  if (!packed) {
+    LOG_ERR("SOKO", "OOM: solution %d bytes", bytes);
+    return false;
+  }
+  if (n == 0 || file.read(packed.get(), bytes) != bytes) {
+    packed.reset();
+    return false;
+  }
+  moveCount = n;
+  return true;
 }
 
 }  // namespace sokoban

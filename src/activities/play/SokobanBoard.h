@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 
 // Sokoban rules and level loading, independent of drawing.
 namespace sokoban {
@@ -11,8 +12,9 @@ constexpr int MAX_CELLS = 1024;
 constexpr int HISTORY_MOVES = 4096;
 
 // Static and dynamic cell bits. PLAYER and the facing bits only appear in
-// Board::visual(), never in the stored cells.
-enum : uint8_t { CELL_WALL = 1, CELL_GOAL = 2, CELL_BOX = 4, CELL_FLOOR = 8, CELL_PLAYER = 16 };
+// Board::visual(), never in the stored cells. DEAD marks floor from which no
+// push can ever bring a box onto a goal; it never reaches visual().
+enum : uint8_t { CELL_WALL = 1, CELL_GOAL = 2, CELL_BOX = 4, CELL_FLOOR = 8, CELL_PLAYER = 16, CELL_DEAD = 128 };
 constexpr int FACING_SHIFT = 5;
 
 enum Dir : uint8_t { UP = 0, RIGHT = 1, DOWN = 2, LEFT = 3 };
@@ -29,7 +31,9 @@ class Board {
   void transpose();
 
   Step move(Dir dir);
-  bool undo();
+  // Takes back the last move; BLOCKED when the history is empty.
+  Step undo();
+  bool lastWasPush() const;
   bool solved() const { return boxesOffGoal == 0; }
   bool canUndo() const { return historyCount > 0; }
 
@@ -43,6 +47,16 @@ class Board {
   // Bit (1 << Dir) set where the neighbour is not a wall (or off the board);
   // bit (0x10 << Dir) likewise for the diagonal clockwise of Dir.
   uint8_t openSides(int cell) const;
+
+  int neighbour(int cell, Dir dir) const;
+  // Floor the keeper could step on: inside, no wall, no box.
+  bool walkable(int cell) const;
+  bool hasBox(int cell) const { return cells[cell] & CELL_BOX; }
+  // Order-independent hash of the box positions.
+  uint32_t boxHash() const;
+  // True when some box off its goal can never move again (dead square or a
+  // frozen 2x2 block): the level cannot be finished without undoing.
+  bool stuck() const;
 
  private:
   uint8_t cells[MAX_CELLS] = {};
@@ -60,7 +74,8 @@ class Board {
   void reset(int width, int height);
   bool setCode(int cell, uint8_t code);
   bool finishLoad(bool sawPlayer);
-  int neighbour(int cell, Dir dir) const;
+  void markDeadCells();
+  bool frozenAt(int cell) const;
   void record(uint8_t entry);
 };
 
@@ -76,9 +91,13 @@ class LevelPack {
   const char* name() const { return packName; }
   // Loads level `index` (0-based). Par values are 0 when unknown.
   bool load(int index, Board& board, uint16_t& parMoves, uint16_t& parPushes) const;
+  // Reads level `index`'s stored solution: 2-bit Dir codes, four per byte,
+  // first move in the high bits. False when the pack has none.
+  bool loadSolution(int index, std::unique_ptr<uint8_t[]>& packed, int& moveCount) const;
 
  private:
   bool fallback = true;
+  bool hasSolutions = false;
   int levelCount = 0;
   char packName[24] = {};
 };

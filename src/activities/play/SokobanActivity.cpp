@@ -28,6 +28,7 @@ constexpr int SIDE = 12;
 constexpr int MAX_TILE = 64;
 constexpr int CLEAN_EVERY_MOVES = 40;
 constexpr unsigned long EXIT_HOLD_MS = 700;
+constexpr unsigned long HINT_HOLD_MS = 700;
 constexpr unsigned long STAR_STEP_MS = 500;  // about one panel refresh per star
 constexpr int SELECT_COLS = 5;
 constexpr int SELECT_ROWS = 7;
@@ -51,21 +52,25 @@ void SokobanActivity::onEnter() {
   shown = makeUniqueNoThrow<uint8_t[]>(sokoban::MAX_CELLS);
   pack.open();
   best = makeUniqueNoThrow<uint16_t[]>(pack.count());
-  if (!board || !shown || !best) {
+  helped = makeUniqueNoThrow<uint8_t[]>((pack.count() + 7) / 8);
+  if (!board || !shown || !best || !helped) {
     LOG_ERR("SOKO", "OOM: board/state for %d levels", pack.count());
     finish();
     return;
   }
   std::fill_n(best.get(), pack.count(), 0);
+  std::fill_n(helped.get(), (pack.count() + 7) / 8, 0);
   loadProgress();
   startLevel(level);
 }
 
 void SokobanActivity::onExit() {
   saveProgress();
+  guide.clear();
   board.reset();
   shown.reset();
   best.reset();
+  helped.reset();
   Activity::onExit();
 }
 
@@ -86,6 +91,11 @@ void SokobanActivity::startLevel(const int index) {
   }
   progressDirty |= level != savedLevel;
   layoutBoard();
+  guide.clear();
+  guideTried = false;
+  hintShown = false;
+  hintsUsed = 0;
+  stuck = board->stuck();
   mode = Mode::PLAY;
   newBest = false;
   fullRedraw = true;
@@ -101,20 +111,28 @@ void SokobanActivity::layoutBoard() {
   const int w = board->width(), h = board->height();
   const int upright = std::min({MAX_TILE, areaW / w, areaH / h});
   const int sideways = std::min({MAX_TILE, areaW / h, areaH / w});
-  if (sideways > upright) board->transpose();
+  transposed = sideways > upright;
+  if (transposed) board->transpose();
   tile = std::max(upright, sideways);
   boardX = (renderer.getScreenWidth() - board->width() * tile) / 2;
   boardY = areaTop + (areaH - board->height() * tile) / 2;
 }
 
 void SokobanActivity::step(const Dir dir) {
+  hintShown = false;
   if (board->move(dir) != Board::Step::BLOCKED) movesSinceClean++;
+  stuck = board->stuck();
   if (board->solved()) completeLevel();
   requestUpdate();
 }
 
 void SokobanActivity::undo() {
-  if (!board->undo()) return;
+  hintShown = false;
+  if (board->undo() == Board::Step::BLOCKED) {
+    requestUpdate();  // still clears a shown hint
+    return;
+  }
+  stuck = board->stuck();
   movesSinceClean++;
   if (mode == Mode::SOLVED) {
     mode = Mode::PLAY;
@@ -123,11 +141,15 @@ void SokobanActivity::undo() {
   requestUpdate();
 }
 
+// Hinted solves count as solved (marked with a bulb) but never set a record
+// over an unaided one; stars are for unaided solves only.
 void SokobanActivity::completeLevel() {
   const int moves = board->moveCount();
-  newBest = best[level] == 0 || moves < best[level];
-  if (newBest) {
+  const bool unaided = hintsUsed == 0;
+  newBest = unaided && (best[level] == 0 || isHelped(level) || moves < best[level]);
+  if (newBest || best[level] == 0) {
     best[level] = static_cast<uint16_t>(moves);
+    setHelped(level, !unaided);
     progressDirty = true;
   }
   mode = Mode::SOLVED;
@@ -154,7 +176,7 @@ int SokobanActivity::solvedCount() const {
 
 // Three stars at par, two within a quarter over it, else one. 0 = par unknown.
 int SokobanActivity::stars(const int moves) const {
-  if (parMoves == 0 || moves == 0) return 0;
+  if (parMoves == 0 || moves == 0 || hintsUsed > 0) return 0;
   if (moves <= parMoves) return 3;
   if (moves <= parMoves + std::max(2, parMoves / 4)) return 2;
   return 1;
@@ -191,6 +213,18 @@ void SokobanActivity::loadProgress() {
           while (*p == ',' || *p == ' ') p++;
         }
       }
+      static constexpr char HELPED_TAG[] = "\"helped\":[";
+      if (const char* p = strstr(text.get(), HELPED_TAG)) {
+        p += sizeof(HELPED_TAG) - 1;
+        while (*p && *p != ']') {
+          char* end = nullptr;
+          const long index = strtol(p, &end, 10);
+          if (end == p) break;
+          if (index >= 0 && index < pack.count()) setHelped(static_cast<int>(index), true);
+          p = end;
+          while (*p == ',' || *p == ' ') p++;
+        }
+      }
     }
   }
   if (!haveLevel) {
@@ -218,9 +252,23 @@ void SokobanActivity::saveProgress() {
     n = snprintf(chunk, sizeof(chunk), i == 0 ? "%u" : ",%u", static_cast<unsigned>(best[i]));
     file.write(chunk, n);
   }
+  static constexpr char HELPED_KEY[] = "],\"helped\":[";
+  file.write(HELPED_KEY, sizeof(HELPED_KEY) - 1);
+  bool first = true;
+  for (int i = 0; i < pack.count(); i++) {
+    if (!isHelped(i)) continue;
+    n = snprintf(chunk, sizeof(chunk), first ? "%d" : ",%d", i);
+    file.write(chunk, n);
+    first = false;
+  }
   file.write("]}\n", 3);
   savedLevel = level;
   progressDirty = false;
+}
+
+void SokobanActivity::setHelped(const int index, const bool on) {
+  const uint8_t bit = static_cast<uint8_t>(1 << (index % 8));
+  helped[index / 8] = on ? (helped[index / 8] | bit) : (helped[index / 8] & static_cast<uint8_t>(~bit));
 }
 
 // ---- input ------------------------------------------------------------------------
@@ -246,6 +294,12 @@ void SokobanActivity::loop() {
     case Mode::SOLVED:
       handleSolved();
       break;
+    case Mode::OFF_PATH:
+      handleOffPath();
+      break;
+    case Mode::SOLUTION:
+      handleSolution();
+      break;
   }
 }
 
@@ -253,6 +307,10 @@ void SokobanActivity::loop() {
 // during one refresh lands as a single frame showing the latest position.
 void SokobanActivity::handlePlay() {
   using B = MappedInputManager::Button;
+  if (mappedInput.wasLongPressed(B::Confirm, HINT_HOLD_MS)) {
+    requestHint(false);
+    return;
+  }
   if (mappedInput.wasReleased(B::Back)) undo();
   if (mappedInput.wasReleased(B::Confirm)) {
     mode = Mode::MENU;
@@ -284,6 +342,10 @@ void SokobanActivity::handleMenu() {
   }
   if (!mappedInput.wasReleased(B::Confirm)) return;
   switch (menuIndex) {
+    case MENU_HINT:
+    case MENU_SOLUTION:
+      requestHint(menuIndex == MENU_SOLUTION);
+      break;
     case MENU_RESTART:
       startLevel(level);
       break;
@@ -364,13 +426,31 @@ void SokobanActivity::drawHeader() const {
   char text[64];
   snprintf(text, sizeof(text), "%s %d / %d", tr(STR_SOKO_LEVEL), level + 1, pack.count());
   renderer.drawText(UI_12_FONT_ID, SIDE + 4, 10, text, true, EpdFontFamily::BOLD);
-  const char* packName = pack.builtIn() ? tr(STR_SOKO_BUILT_IN) : pack.name();
-  const int nameW = renderer.getTextWidth(UI_10_FONT_ID, packName);
-  renderer.drawText(UI_10_FONT_ID, width - SIDE - 4 - nameW, 13, packName);
+  if (mode == Mode::SOLUTION) {
+    snprintf(text, sizeof(text), "%s %d / %d", tr(STR_SOKO_SOLUTION), hintShown ? hint.step + 1 : guide.pushes(),
+             guide.pushes());
+  } else {
+    snprintf(text, sizeof(text), "%s", pack.builtIn() ? tr(STR_SOKO_BUILT_IN) : pack.name());
+  }
+  const bool boldRight = mode == Mode::SOLUTION;
+  const int nameW =
+      renderer.getTextWidth(UI_10_FONT_ID, text, boldRight ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+  renderer.drawText(UI_10_FONT_ID, width - SIDE - 4 - nameW, 13, text, true,
+                    boldRight ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
 
   snprintf(text, sizeof(text), "%s %d   %s %d", tr(STR_SOKO_MOVES), board->moveCount(), tr(STR_SOKO_PUSHES),
            board->pushCount());
   renderer.drawText(UI_10_FONT_ID, SIDE + 4, 42, text);
+  if (stuck && !board->solved()) {
+    // A gentle note instead of par/best: the position can no longer be won.
+    const char* note = tr(STR_SOKO_STUCK);
+    const int noteW = renderer.getTextWidth(UI_10_FONT_ID, note, EpdFontFamily::BOLD) + 24;
+    const int noteX = width - SIDE - noteW;
+    renderer.fillRoundedRect(noteX, 38, noteW, 26, 13, Color::Black);
+    renderer.drawText(UI_10_FONT_ID, noteX + 12, 40, note, false, EpdFontFamily::BOLD);
+    renderer.drawLine(SIDE, HEADER_HEIGHT - 2, width - SIDE - 1, HEADER_HEIGHT - 2, 2, true);
+    return;
+  }
   char par[16] = "-", record[16] = "-";
   if (parMoves > 0) snprintf(par, sizeof(par), "%u", static_cast<unsigned>(parMoves));
   if (best[level] > 0) snprintf(record, sizeof(record), "%u", static_cast<unsigned>(best[level]));
@@ -385,7 +465,7 @@ void SokobanActivity::drawBoard(const bool all) {
   const int w = board->width();
   const int total = w * board->height();
   for (int i = 0; i < total; i++) {
-    const uint8_t look = board->visual(i);
+    const uint8_t look = tileLook(i);
     if (!all && shown[i] == look) continue;
     shown[i] = look;
     const uint8_t sides = (look & sokoban::CELL_WALL) ? board->openSides(i) : 0;
@@ -409,6 +489,14 @@ void SokobanActivity::drawPlayHints() const {
   } else if (mode == Mode::SOLVED) {
     confirm = tr(STR_SOKO_NEXT);
     left = right = "";
+  } else if (mode == Mode::OFF_PATH) {
+    back = tr(STR_CANCEL);
+    confirm = tr(STR_SOKO_UNDO);
+    left = right = "";
+  } else if (mode == Mode::SOLUTION) {
+    back = confirm = tr(STR_SOKO_DONE);
+    left = tr(STR_SOKO_PREV);
+    right = tr(STR_SOKO_NEXT);
   }
   const auto labels = mappedInput.mapLabels(back, confirm, left, right);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -428,12 +516,13 @@ void SokobanActivity::drawCardFrame(const int x, const int y, const int width, c
 }
 
 void SokobanActivity::drawMenu() const {
-  static constexpr StrId ITEMS[MENU_COUNT] = {StrId::STR_SOKO_RESUME, StrId::STR_SOKO_RESTART, StrId::STR_SOKO_LEVELS,
-                                              StrId::STR_SOKO_EXIT};
-  constexpr int ITEM_H = 54;
+  static constexpr StrId ITEMS[MENU_COUNT] = {StrId::STR_SOKO_RESUME,        StrId::STR_SOKO_HINT,
+                                              StrId::STR_SOKO_SHOW_SOLUTION, StrId::STR_SOKO_RESTART,
+                                              StrId::STR_SOKO_LEVELS,        StrId::STR_SOKO_EXIT};
+  constexpr int ITEM_H = 52;
   const int width = renderer.getScreenWidth();
   const int cardW = std::min(380, width - 48);
-  const int cardH = 76 + ITEM_H * MENU_COUNT + 36;
+  const int cardH = 76 + ITEM_H * MENU_COUNT + 56;
   const int x = (width - cardW) / 2;
   const int y = std::max(HEADER_HEIGHT + 8, (renderer.getScreenHeight() - cardH) / 2 - 20);
   drawCardFrame(x, y, cardW, cardH);
@@ -445,6 +534,7 @@ void SokobanActivity::drawMenu() const {
     renderer.drawCenteredText(UI_12_FONT_ID, iy + 10, I18N.get(ITEMS[i]), !focused,
                               focused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
   }
+  renderer.drawCenteredText(SMALL_FONT_ID, y + cardH - 56, tr(STR_SOKO_HOLD_HINT));
   renderer.drawCenteredText(SMALL_FONT_ID, y + cardH - 34, tr(STR_SOKO_HOLD_EXIT));
 }
 
@@ -453,7 +543,8 @@ void SokobanActivity::drawSolvedCard() const {
   const int moves = board->moveCount();
   const int rating = stars(moves);
   const int cardW = std::min(400, width - 48);
-  const int cardH = rating > 0 ? 236 : 176;
+  const bool hinted = hintsUsed > 0;
+  const int cardH = (rating > 0 || hinted) ? 236 : 176;
   const int x = (width - cardW) / 2;
   const int boardMid = boardY + board->height() * tile / 2;
   const int y = std::clamp(boardMid - cardH / 2, HEADER_HEIGHT + 8, hintsTop(renderer) - cardH - 8);
@@ -462,6 +553,13 @@ void SokobanActivity::drawSolvedCard() const {
   int line = y + 64;
   if (rating > 0) {
     for (int i = 0; i < 3; i++) sokoban::drawStar(renderer, width / 2 + (i - 1) * 64, line + 26, 24, i < starsShown);
+    line += 66;
+  } else if (hinted) {
+    const char* note = tr(STR_SOKO_WITH_HINTS);
+    const int noteW = renderer.getTextWidth(UI_10_FONT_ID, note);
+    const int noteX = (width - noteW + 36) / 2;
+    sokoban::drawBulb(renderer, noteX - 22, line + 24, 30, true);
+    renderer.drawText(UI_10_FONT_ID, noteX, line + 14, note);
     line += 66;
   }
   char text[64];
@@ -508,8 +606,12 @@ void SokobanActivity::drawSelect() const {
     const int tw = renderer.getTextWidth(UI_12_FONT_ID, text, EpdFontFamily::BOLD);
     renderer.drawText(UI_12_FONT_ID, x + (cellW - tw) / 2, y + cellH / 2 - 22, text, !focused, EpdFontFamily::BOLD);
     if (best[i] == 0) continue;
-    // Solved: a check mark under the number.
+    // Solved: a check mark under the number, or a bulb when hints did it.
     const int cx = x + cellW / 2, cy = y + cellH / 2 + 18;
+    if (isHelped(i)) {
+      sokoban::drawBulb(renderer, cx, cy + 2, 24, !focused);
+      continue;
+    }
     renderer.drawLine(cx - 9, cy, cx - 3, cy + 6, 3, !focused);
     renderer.drawLine(cx - 3, cy + 6, cx + 9, cy - 7, 3, !focused);
   }
@@ -544,6 +646,7 @@ void SokobanActivity::render(RenderLock&& lock) {
     drawPlayHints();
     if (mode == Mode::MENU) drawMenu();
     if (mode == Mode::SOLVED) drawSolvedCard();
+    if (mode == Mode::OFF_PATH) drawOffPathCard();
     fullRedraw = false;
   }
   if (clean) {
