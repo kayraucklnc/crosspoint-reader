@@ -15,7 +15,7 @@ class PlayMenuActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  static constexpr int ITEM_COUNT = 3;
+  static constexpr int ITEM_COUNT = 4;
 
   ButtonNavigator buttonNavigator;
   int selected = 0;
