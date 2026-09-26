@@ -7,6 +7,7 @@
 #include "MappedInputManager.h"
 #include "SketchActivity.h"
 #include "SnakeActivity.h"
+#include "WordleActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -32,8 +33,11 @@ void PlayMenuActivity::open() {
     case 1:
       game = makeUniqueNoThrow<BlackjackActivity>(renderer, mappedInput);
       break;
-    default:
+    case 2:
       game = makeUniqueNoThrow<SketchActivity>(renderer, mappedInput);
+      break;
+    default:
+      game = makeUniqueNoThrow<WordleActivity>(renderer, mappedInput);
       break;
   }
   if (!game) {
@@ -80,7 +84,7 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
       renderer.drawText(SMALL_FONT_ID, x + 14, y + 16, "K", true, EpdFontFamily::BOLD);
       break;
     }
-    default: {
+    case 2: {
       // A quick pencil face.
       const int c = size / 2;
       renderer.drawRoundedRect(x + c - 22, y + 8, 44, 54, 2, 22, true);
@@ -92,15 +96,32 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
       renderer.drawLine(x + c + 20, y + 70, x + c + 30, y + 72, 2, true);
       break;
     }
+    default: {
+      // Wordle: solved, misplaced and unused tiles.
+      constexpr int TILE = 32;
+      static constexpr uint8_t LOOK[4] = {2, 1, 0, 2};  // 2 solid, 1 hatched, 0 outline
+      for (int i = 0; i < 4; i++) {
+        const int tx = x + 4 + (i % 2) * (TILE + 4), ty = y + 4 + (i / 2) * (TILE + 4);
+        if (LOOK[i] == 2) {
+          renderer.fillRoundedRect(tx, ty, TILE, TILE, 4, Color::Black);
+          continue;
+        }
+        renderer.drawRoundedRect(tx, ty, TILE, TILE, LOOK[i] ? 2 : 1, 4, true);
+        for (int d = 6; LOOK[i] && d < 2 * TILE - 4; d += 6) {
+          renderer.drawLine(tx + std::max(2, d - TILE + 2), ty + std::min(d, TILE - 2), tx + std::min(d, TILE - 2),
+                            ty + std::max(2, d - TILE + 2), true);
+        }
+      }
+      break;
+    }
   }
 }
 
-void PlayMenuActivity::renderItem(const int index, const int x, const int y, const int width,
-                                  const int height) const {
-  static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_BLACKJACK,
-                                                StrId::STR_PLAY_SKETCH};
+void PlayMenuActivity::renderItem(const int index, const int x, const int y, const int width, const int height) const {
+  static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_BLACKJACK, StrId::STR_PLAY_SKETCH,
+                                               StrId::STR_PLAY_WORDLE};
   static constexpr StrId DESCRIPTIONS[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE_DESC, StrId::STR_PLAY_BLACKJACK_DESC,
-                                                     StrId::STR_PLAY_SKETCH_DESC};
+                                                     StrId::STR_PLAY_SKETCH_DESC, StrId::STR_PLAY_WORDLE_DESC};
   const bool focused = index == selected;
   renderer.drawRoundedRect(x, y, width, height, focused ? FOCUS_FRAME : 1, 10, true);
   const int glyphY = y + (height - GLYPH) / 2;
