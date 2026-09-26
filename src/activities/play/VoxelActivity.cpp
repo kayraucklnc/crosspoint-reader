@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <HalGPIO.h>
+
 #include "MappedInputManager.h"
 #include "PlayCommon.h"
 #include "components/UITheme.h"
@@ -21,16 +23,19 @@
 namespace {
 constexpr int N = VoxelActivity::N;
 constexpr int H = VoxelActivity::H;
-constexpr int HALF = 14;    // half a tile's width
-constexpr int QUARTER = 7;  // half a tile's height
-constexpr int CUBE = 16;    // cube side height
-constexpr int SPAN = 2 * HALF;  // top-face local coordinate range
-constexpr int SLAB = 5;         // bridge plank thickness
+constexpr int HALF = 20;         // half a tile's width
+constexpr int QUARTER = 10;      // half a tile's height
+constexpr int CUBE = 23;         // cube side height
+constexpr int SPAN = 2 * HALF;   // top-face local coordinate range
+constexpr int SLAB = 7;          // bridge plank thickness
+constexpr float CENTRE = (N - 1) / 2.0f;
+constexpr float RADIUS = N * 0.36f;
 constexpr int HEADER = 62;
-constexpr int GROUND = 9;  // below this, side faces darken toward the island's underside
+constexpr int GROUND = 7;  // below this, side faces darken toward the island's underside
 constexpr unsigned long HOLD_MS = 650;
 constexpr const char* SAVE_PATH = "/.crosspoint/skyisland.bin";
-constexpr int SAVE_HEADER = 12;
+constexpr int SAVE_HEADER = 16;
+constexpr char SAVE_MAGIC[4] = {'V', 'O', 'X', '2'};
 
 enum Material : uint8_t { AIR, GRASS, DIRT, STONE, SAND, WOOD, LEAVES, WATER, PLANK, GLASS, LANTERN, FLOWER, COUNT };
 // Dither level (of 16) per face: top, left (lit), right (shade).
@@ -41,6 +46,18 @@ constexpr StrId NAMES[COUNT] = {StrId::STR_VX_GRASS, StrId::STR_VX_GRASS,  StrId
                                 StrId::STR_VX_PLANK, StrId::STR_VX_GLASS,  StrId::STR_VX_LANTERN, StrId::STR_VX_FLOWER};
 constexpr StrId MENU[] = {StrId::STR_VX_RESUME, StrId::STR_VX_ROTATE, StrId::STR_VX_NEW, StrId::STR_VX_WALLPAPER,
                           StrId::STR_VX_EXIT};
+// Island shapes; the submenu lists "surprise me" first, then these.
+enum Shape : uint8_t { CLASSIC, PLATEAU, TWIN, ATOLL, TERRACES, ISLES, SHAPE_COUNT };
+constexpr StrId SHAPE_MENU[SHAPE_COUNT + 1] = {StrId::STR_VX_SHAPE_RANDOM, StrId::STR_VX_SHAPE_CLASSIC,
+                                               StrId::STR_VX_SHAPE_PLATEAU, StrId::STR_VX_SHAPE_TWIN,
+                                               StrId::STR_VX_SHAPE_ATOLL, StrId::STR_VX_SHAPE_TERRACES,
+                                               StrId::STR_VX_SHAPE_ISLES};
+// Screen diagonal each button moves the cursor along, as (x sign, y sign):
+// front Left/Right run bottom-left/top-right, side Up/Down top-left/bottom-right.
+constexpr int8_t ARROW_LEFT[2] = {-1, 1}, ARROW_RIGHT[2] = {1, -1}, ARROW_UP[2] = {-1, -1}, ARROW_DOWN[2] = {1, 1};
+// Blank hint labels for the move buttons; the arrows are drawn into those boxes.
+// Distinct strings so the mapped slot of each can be found by pointer.
+constexpr char LEFT_SLOT[] = " ", RIGHT_SLOT[] = "  ";
 constexpr uint8_t BAYER[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
 
 bool solid(const uint8_t m) { return m != AIR && m != PLANK && m != LANTERN && m != FLOWER; }
@@ -157,67 +174,127 @@ int VoxelActivity::columnTop(const int x, const int y) const {
   return -1;
 }
 
-void VoxelActivity::generate(const uint32_t newSeed) {
+void VoxelActivity::fillColumn(const int x, const int y, const int top, const int depth) {
+  for (int z = std::max(0, top - depth); z <= top; z++) set(x, y, z, z == top ? GRASS : z >= top - 2 ? DIRT : STONE);
+}
+
+// Deterministic per (seed, shape).
+void VoxelActivity::generate(const uint32_t newSeed, const uint8_t newShape) {
   seed = newSeed;
+  shape = newShape % SHAPE_COUNT;
   memset(world.get(), AIR, N * N * H);
-  uint32_t rng = seed * 2654435761u | 1u;
+  uint32_t rng = (seed ^ (shape * 0x9E3779B9u)) * 2654435761u | 1u;
   const auto rand = [&rng](const int n) {
     rng ^= rng << 13;
     rng ^= rng >> 17;
     rng ^= rng << 5;
     return static_cast<int>(rng % static_cast<uint32_t>(n));
   };
-  // Island body: noisy disc, domed top, tapering rocky underside.
+  const auto nz = [this](const float x, const float y, const int k) { return noise(x, y, seed + k); };
+  const auto underside = [&](const float d, const int x, const int y) {
+    return 1 + static_cast<int>(powf(std::max(0.0f, 1 - d), 1.4f) * 8 + nz(x * 0.5f, y * 0.5f, 2) * 2);
+  };
+  // Twin peaks sit on a seeded diagonal; the archipelago's islets are placed up front.
+  const float flip = rand(2) ? 1.0f : -1.0f;
+  float isleX[6], isleY[6], isleR[6];
+  int isleTop[6];
+  const int isles = shape == ISLES ? 4 + rand(2) : 0;
+  for (int i = 0; i < isles; i++) {
+    const float a = i * 6.2831853f / isles + rand(100) * 0.006f, r = 3.4f + rand(100) * 0.012f;
+    isleX[i] = CENTRE + cosf(a) * r, isleY[i] = CENTRE + sinf(a) * r;
+    isleR[i] = 1.2f + rand(100) * 0.008f;
+    isleTop[i] = 5 + rand(4);
+  }
   for (int y = 0; y < N; y++) {
     for (int x = 0; x < N; x++) {
-      const float dx = x - 9.5f, dy = y - 9.5f;
-      const float rim = 7.4f * (0.8f + 0.4f * noise(x * 0.35f, y * 0.35f, seed));
-      const float d = sqrtf(dx * dx + dy * dy) / rim;
-      if (d >= 1) continue;
-      const float lift = (1 - d) * 2.2f + noise(x * 0.3f, y * 0.3f, seed + 1) * 2.4f - 1;
-      const int top = std::clamp(GROUND + static_cast<int>(lroundf(lift)), 7, 12);
-      const int depth = 1 + static_cast<int>(powf(1 - d, 1.4f) * 12 + noise(x * 0.5f, y * 0.5f, seed + 2) * 2.5f);
-      for (int z = std::max(0, top - depth); z <= top; z++) {
-        set(x, y, z, z == top ? GRASS : z >= top - 2 ? DIRT : STONE);
+      const float dx = x - CENTRE, dy = y - CENTRE, n = nz(x * 0.35f, y * 0.35f, 0);
+      const float d = sqrtf(dx * dx + dy * dy) / (RADIUS * (shape == PLATEAU ? 0.9f + 0.2f * n : 0.8f + 0.4f * n));
+      const float lift = nz(x * 0.3f, y * 0.3f, 1);
+      switch (shape) {
+        case PLATEAU:
+          if (d < 1) fillColumn(x, y, GROUND + 1, underside(d, x, y));
+          break;
+        case TWIN: {
+          const float ox = 2.9f * flip, oy = 1.5f;
+          const float d1 = sqrtf((dx - ox) * (dx - ox) + (dy - oy) * (dy - oy)) / (3.3f * (0.85f + 0.3f * n));
+          const float d2 = sqrtf((dx + ox) * (dx + ox) + (dy + oy) * (dy + oy)) / (3.3f * (0.85f + 0.3f * n));
+          const float dm = std::min(d1, d2);
+          if (dm >= 1) break;
+          const int top = std::clamp(GROUND - 1 + static_cast<int>(lroundf((1 - dm) * 4.6f + lift - 0.5f)), 5, 11);
+          fillColumn(x, y, top, underside(std::min(d, dm), x, y) + 1);
+          break;
+        }
+        case ATOLL:
+          if (d >= 1) break;
+          if (d > 0.45f) {
+            fillColumn(x, y, GROUND + static_cast<int>(lroundf(lift * 1.6f - 0.5f)), underside(d, x, y));
+          } else {  // lagoon over a sandy bed
+            fillColumn(x, y, GROUND - 2, underside(d, x, y));
+            set(x, y, GROUND - 2, SAND);
+            set(x, y, GROUND - 1, WATER);
+          }
+          break;
+        case TERRACES:
+          if (d < 1) fillColumn(x, y, GROUND - 1 + static_cast<int>((1 - d) * 4.6f + lift * 0.6f), underside(d, x, y));
+          break;
+        case ISLES:
+          for (int i = 0; i < isles; i++) {
+            const float ix = x - isleX[i], iy = y - isleY[i];
+            const float di = sqrtf(ix * ix + iy * iy) / (isleR[i] * (0.85f + 0.3f * n));
+            if (di < 1) fillColumn(x, y, isleTop[i] + (di < 0.4f), 1 + static_cast<int>((1 - di) * 3));
+          }
+          break;
+        default: {  // classic: noisy dome
+          if (d >= 1) break;
+          const int top = std::clamp(GROUND + static_cast<int>(lroundf((1 - d) * 2 + lift * 2.2f - 0.9f)), 5, 9);
+          fillColumn(x, y, top, underside(d, x, y));
+          break;
+        }
       }
     }
   }
-  // Pond with a sandy rim, draining off the +x edge as a waterfall.
-  const int px = 8 + rand(3), py = 8 + rand(3);
-  const int level = std::max(1, columnTop(px, py) - 1);
-  for (int y = py - 3; y <= py + 3; y++) {
-    for (int x = px - 3; x <= px + 3; x++) {
-      const float e = (x - px) * (x - px) / 5.0f + (y - py) * (y - py) / 2.6f;
-      if (columnTop(x, y) < level) continue;
-      if (e <= 1) {
-        for (int z = level + 1; z < H; z++) set(x, y, z, AIR);
-        set(x, y, level, WATER);
-      } else if (e <= 2.6f && get(x, y, columnTop(x, y)) == GRASS) {
-        set(x, y, columnTop(x, y), SAND);
+  // Classic islands get a pond with a sandy rim that spills off the +x edge.
+  int px = static_cast<int>(CENTRE), py = px;
+  if (shape == CLASSIC) {
+    px += rand(3) - 1, py += rand(3) - 1;
+    const int level = std::max(1, columnTop(px, py) - 1);
+    for (int y = py - 3; y <= py + 3; y++) {
+      for (int x = px - 3; x <= px + 3; x++) {
+        const float e = (x - px) * (x - px) / 3.2f + (y - py) * (y - py) / 1.8f;
+        const int top = columnTop(x, y);
+        if (top < level) continue;
+        if (e <= 1) {
+          for (int z = level + 1; z < H; z++) set(x, y, z, AIR);
+          set(x, y, level, WATER);
+        } else if (e <= 2.6f && get(x, y, top) == GRASS) {
+          set(x, y, top, SAND);
+        }
       }
     }
-  }
-  for (int x = px + 1; x < N; x++) {
-    const int top = columnTop(x, py);
-    if (top < 0) {
-      for (int z = level; z >= std::max(0, level - 9); z--) set(x, py, z, WATER);
-      break;
+    for (int x = px + 1; x < N; x++) {
+      const int top = columnTop(x, py);
+      if (top < 0) {
+        for (int z = level; z >= std::max(0, level - 7); z--) set(x, py, z, WATER);
+        break;
+      }
+      if (top < level) break;
+      for (int z = level + 1; z < H; z++) set(x, py, z, AIR);
+      set(x, py, level, WATER);
     }
-    if (top < level) break;
-    for (int z = level + 1; z < H; z++) set(x, py, z, AIR);
-    set(x, py, level, WATER);
   }
-  // Trees, rocks, flowers and a lantern on free grass.
-  int treeX[6], treeY[6], trees = 0;
-  const int wantTrees = 2 + rand(3);
+  // Trees (fewer on the building plateau), rocks, flowers and a lantern.
+  static constexpr uint8_t TREES[SHAPE_COUNT] = {3, 1, 3, 2, 2, 2};
+  int treeX[4], treeY[4], trees = 0;
+  const int wantTrees = 1 + rand(TREES[shape]);
   for (int attempt = 0; attempt < 80 && trees < wantTrees; attempt++) {
-    const int x = 2 + rand(N - 4), y = 2 + rand(N - 4), top = columnTop(x, y);
-    if (top < 0 || get(x, y, top) != GRASS || std::abs(x - px) + std::abs(y - py) < 4) continue;
+    const int x = 1 + rand(N - 2), y = 1 + rand(N - 2), top = columnTop(x, y);
+    if (top < 0 || top > H - 6 || get(x, y, top) != GRASS) continue;
+    if (shape == CLASSIC && std::abs(x - px) + std::abs(y - py) < 3) continue;
     bool crowded = false;
     for (int t = 0; t < trees; t++) crowded = crowded || std::abs(x - treeX[t]) + std::abs(y - treeY[t]) < 4;
     if (crowded) continue;
     treeX[trees] = x, treeY[trees++] = y;
-    const int trunk = 3 + rand(2);
+    const int trunk = 2 + rand(2);
     for (int z = 1; z <= trunk; z++) set(x, y, top + z, WOOD);
     // Rounded crown: 3x3 below, a wide diamond in the middle, tapering to a tip.
     static constexpr int8_t CROWN[4] = {1, 2, 1, 0};
@@ -242,21 +319,27 @@ void VoxelActivity::generate(const uint32_t newSeed) {
       placed++;
     }
   };
-  scatter(STONE, 3, GRASS);
-  scatter(FLOWER, 9, GRASS);
-  scatter(LANTERN, 1, SAND);
-  // Two small rocks drifting beside the island.
-  static constexpr int8_t ISLETS[2][2] = {{2, 16}, {16, 2}};
-  for (const auto& islet : ISLETS) {
-    const int z = 3 + rand(3);
-    if (columnTop(islet[0], islet[1]) >= 0) continue;
-    set(islet[0], islet[1], z - 1, STONE);
-    set(islet[0], islet[1], z, GRASS);
-    set(islet[0] + 1, islet[1], z, STONE);
-    set(islet[0], islet[1] + 1, z, STONE);
+  scatter(STONE, shape == PLATEAU ? 1 : 2, GRASS);
+  scatter(FLOWER, 7, GRASS);
+  scatter(LANTERN, 1, shape == CLASSIC ? SAND : GRASS);
+  // Two small rocks drifting beside the larger islands.
+  static constexpr int8_t DRIFT[2][2] = {{1, N - 3}, {N - 3, 1}};
+  for (const auto& rock : DRIFT) {
+    const int z = 2 + rand(3);
+    if (shape == ISLES || columnTop(rock[0], rock[1]) >= 0 || columnTop(rock[0] + 1, rock[1] + 1) >= 0) continue;
+    set(rock[0], rock[1], z - 1, STONE);
+    set(rock[0], rock[1], z, GRASS);
+    set(rock[0] + 1, rock[1], z, STONE);
+    set(rock[0], rock[1] + 1, z, STONE);
   }
-  curX = px - 3;
-  curY = py;
+  // Start on the land column nearest the middle.
+  int best = 1 << 20;
+  for (int y = 0; y < N; y++) {
+    for (int x = 0; x < N; x++) {
+      const int dist = (x - px) * (x - px) + (y - py) * (y - py) + 1;
+      if (columnTop(x, y) >= 0 && get(x, y, columnTop(x, y)) != WATER && dist < best) best = dist, curX = x, curY = y;
+    }
+  }
   curZ = H - 1;
   placeCursorZ();
   dirtyWorld = true;
@@ -289,13 +372,17 @@ bool VoxelActivity::load() {
   HalFile file;
   if (!Storage.exists(SAVE_PATH) || !Storage.openFileForRead("VOXEL", SAVE_PATH, file)) return false;
   uint8_t header[SAVE_HEADER];
-  if (file.read(header, SAVE_HEADER) != SAVE_HEADER || memcmp(header, "VOX1", 4) != 0) return false;
+  if (file.read(header, SAVE_HEADER) != SAVE_HEADER || memcmp(header, SAVE_MAGIC, 4) != 0 || header[13] != N ||
+      header[14] != H) {
+    return false;  // older or differently sized worlds start fresh
+  }
   if (file.read(world.get(), N * N * H) != N * N * H) return false;
   memcpy(&seed, header + 4, 4);
   rotation = header[8] & 3;
   selected = std::clamp<uint8_t>(header[9], GRASS, FLOWER);
   curX = std::min<int>(header[10], N - 1);
   curY = std::min<int>(header[11], N - 1);
+  shape = header[12] % SHAPE_COUNT;
   curZ = GROUND;
   placeCursorZ();
   return true;
@@ -307,12 +394,16 @@ void VoxelActivity::save() {
     LOG_ERR("VOXEL", "Failed to write %s", SAVE_PATH);
     return;
   }
-  uint8_t header[SAVE_HEADER] = {'V', 'O', 'X', '1'};
+  uint8_t header[SAVE_HEADER] = {};
+  memcpy(header, SAVE_MAGIC, 4);
   memcpy(header + 4, &seed, 4);
   header[8] = rotation;
   header[9] = selected;
   header[10] = static_cast<uint8_t>(curX);
   header[11] = static_cast<uint8_t>(curY);
+  header[12] = shape;
+  header[13] = N;
+  header[14] = H;
   file.write(header, SAVE_HEADER);
   file.write(world.get(), N * N * H);
   dirtyWorld = false;
@@ -466,10 +557,9 @@ void VoxelActivity::runMenu(const int item) {
       rotation = (rotation + 1) & 3;
       fullRedraw = true;
       break;
-    case 2:
-      generate(seed * 1103515245u + static_cast<uint32_t>(millis()) + 12345u);
-      save();
-      startReveal();
+    case 2:  // opens the shape list
+      menuOpen = shapeMenu = true;
+      menuIndex = 0;
       break;
     case 3:
       wallpaperRequested = true;
@@ -484,6 +574,15 @@ void VoxelActivity::runMenu(const int item) {
   requestUpdate();
 }
 
+// Item 0 picks a random shape; the rest map onto Shape.
+void VoxelActivity::newIsland(const int item) {
+  const uint32_t next = seed * 1103515245u + static_cast<uint32_t>(millis()) + 12345u;
+  generate(next, item == 0 ? next % SHAPE_COUNT : item - 1);
+  save();
+  startReveal();
+  requestUpdate();
+}
+
 void VoxelActivity::onEnter() {
   Activity::onEnter();
   world = makeUniqueNoThrow<uint8_t[]>(N * N * H);
@@ -492,7 +591,10 @@ void VoxelActivity::onEnter() {
     finish();
     return;
   }
-  if (!load()) generate(static_cast<uint32_t>(millis()) | 1u);
+  if (!load()) {
+    const uint32_t first = static_cast<uint32_t>(millis()) | 1u;
+    generate(first, first % SHAPE_COUNT);
+  }
   startReveal();
   requestUpdate();
 }
@@ -527,17 +629,28 @@ void VoxelActivity::loop() {
     return;
   }
   if (menuOpen) {
+    const int count = shapeMenu ? SHAPE_COUNT + 1 : MENU_ITEMS;
     const int before = menuIndex;
-    if (mappedInput.wasPressed(B::Up) || mappedInput.wasPressed(B::Left)) {
-      menuIndex = (menuIndex + MENU_ITEMS - 1) % MENU_ITEMS;
-    }
-    if (mappedInput.wasPressed(B::Down) || mappedInput.wasPressed(B::Right)) menuIndex = (menuIndex + 1) % MENU_ITEMS;
+    if (mappedInput.wasPressed(B::Up) || mappedInput.wasPressed(B::Left)) menuIndex = (menuIndex + count - 1) % count;
+    if (mappedInput.wasPressed(B::Down) || mappedInput.wasPressed(B::Right)) menuIndex = (menuIndex + 1) % count;
     if (menuIndex != before) requestUpdate();
     if (mappedInput.wasReleased(B::Confirm)) {
+      if (shapeMenu) {
+        menuOpen = shapeMenu = false;
+        newIsland(menuIndex);
+        return;
+      }
       lock.unlock();
       runMenu(menuIndex);
     } else if (mappedInput.wasReleased(B::Back)) {
-      runMenu(0);
+      if (shapeMenu) {  // back to the main menu
+        shapeMenu = false;
+        menuIndex = 2;
+        sceneRedraw = true;
+        requestUpdate();
+      } else {
+        runMenu(0);
+      }
     }
     return;
   }
@@ -555,10 +668,11 @@ void VoxelActivity::loop() {
   }
   if (mappedInput.wasReleased(B::Confirm)) place();
   if (mappedInput.wasReleased(B::Back)) remove();
-  if (mappedInput.wasPressed(B::Left)) moveCursor(-1, 0);
-  if (mappedInput.wasPressed(B::Right)) moveCursor(1, 0);
-  if (mappedInput.wasPressed(B::Up)) moveCursor(0, -1);
-  if (mappedInput.wasPressed(B::Down)) moveCursor(0, 1);
+  // See ARROW_*: each button follows one screen diagonal whatever the rotation.
+  if (mappedInput.wasPressed(B::Left)) moveCursor(0, 1);
+  if (mappedInput.wasPressed(B::Right)) moveCursor(0, -1);
+  if (mappedInput.wasPressed(B::Up)) moveCursor(-1, 0);
+  if (mappedInput.wasPressed(B::Down)) moveCursor(1, 0);
 }
 
 // ---- drawing ------------------------------------------------------------------------
@@ -575,8 +689,11 @@ void VoxelActivity::drawBackground(const Rect& r) const {
     const int cr = 16 + static_cast<int>(h % 14);
     const int ccx = c * width / 5 + width / 10 + static_cast<int>((h >> 8) % 41) - 20;
     const int ccy = HEADER + 30 + static_cast<int>((h >> 16) % (height - HEADER - 140));
-    if (ccx + 2 * cr + 12 > island.x0 && ccx - 2 * cr - 12 < island.x1 && ccy + cr > island.y0 - 12 &&
-        ccy - 2 * cr < island.y1 + 12) {
+    int kx = 0, ky = 0;
+    compassCentre(kx, ky);
+    if ((ccx + 2 * cr + 12 > island.x0 && ccx - 2 * cr - 12 < island.x1 && ccy + cr > island.y0 - 12 &&
+         ccy - 2 * cr < island.y1 + 12) ||
+        (ccx - 2 * cr < kx + 50 && ccy + cr > ky - 40)) {
       continue;
     }
     const auto inside = [&](const int x, const int y) {
@@ -668,29 +785,29 @@ void VoxelActivity::drawDecoration(const int cx, const int ty, const uint8_t m, 
   const Pen pen(renderer, clip.x0, clip.y0, clip.x1, clip.y1);
   const int fy = ty + CUBE + QUARTER;
   if (m == FLOWER) {
-    pen.line(cx, fy, cx, fy - 7);
-    pen.put(cx - 1, fy - 3, true), pen.put(cx - 2, fy - 4, true), pen.put(cx + 1, fy - 5, true);
-    for (int k = -2; k <= 2; k++) {
-      pen.put(cx + k, fy - 10 + (std::abs(k) == 2 ? 0 : std::abs(k) == 1 ? -2 : 0), true);
-      pen.put(cx + k, fy - 10 + (std::abs(k) == 2 ? 0 : 2), true);
+    pen.line(cx, fy, cx, fy - 11), pen.line(cx + 1, fy, cx + 1, fy - 11);
+    pen.line(cx - 1, fy - 4, cx - 4, fy - 7), pen.line(cx + 2, fy - 6, cx + 5, fy - 8);  // leaves
+    for (int y = -4; y <= 4; y++) {  // round blossom, hollow centre
+      for (int x = -4; x <= 4; x++) {
+        const int r = x * x + y * y;
+        if (r <= 18) pen.put(cx + x, fy - 15 + y, r > 3);
+      }
     }
-    pen.put(cx - 1, fy - 11, true), pen.put(cx + 1, fy - 11, true), pen.put(cx, fy - 13, true);
-    pen.put(cx, fy - 10, false);
     return;
   }
-  // Lantern on a post: dark frame, glowing white core.
-  pen.line(cx - 1, fy, cx - 1, fy - 9), pen.line(cx, fy, cx, fy - 9);
-  for (int y = fy - 18; y <= fy - 9; y++) {
-    for (int x = cx - 4; x <= cx + 3; x++) {
-      const bool frame = x == cx - 4 || x == cx + 3 || y == fy - 18 || y == fy - 9;
-      pen.put(x, y, frame || (y == fy - 14 && x == cx - 1) || (y == fy - 14 && x == cx));
+  // Lantern on a post: dark frame and roof, glowing white core, a dotted halo.
+  pen.line(cx - 1, fy, cx - 1, fy - 12), pen.line(cx, fy, cx, fy - 12);
+  for (int y = fy - 26; y <= fy - 12; y++) {
+    for (int x = cx - 6; x <= cx + 5; x++) {
+      const bool frame = x <= cx - 5 || x >= cx + 4 || y <= fy - 25 || y >= fy - 13;
+      pen.put(x, y, frame || (y == fy - 19 && (x == cx - 1 || x == cx)));
     }
   }
-  pen.line(cx - 6, fy - 19, cx - 1, fy - 22), pen.line(cx, fy - 22, cx + 5, fy - 19);
-  pen.line(cx - 5, fy - 19, cx + 4, fy - 19);
-  for (int k = 0; k < 8; k++) {  // faint glow
-    const int gx = cx + (k % 2 ? 7 : -8) + (k / 2 % 2), gy = fy - 16 + k;
-    if ((gx + gy) % 2 == 0) pen.put(gx, gy, true);
+  const int roofX[3] = {cx - 9, cx + 8, cx}, roofY[3] = {fy - 26, fy - 26, fy - 32};
+  renderer.fillPolygon(roofX, roofY, 3, true);  // clipped by drawScene's clip rect
+  for (int k = 0; k < 12; k++) {
+    const int gx = cx + (k % 2 ? 10 : -11), gy = fy - 25 + k;
+    if (k % 3 != 1) pen.put(gx, gy, true);
   }
 }
 
@@ -747,7 +864,9 @@ void VoxelActivity::drawHeader() const {
   const int width = renderer.getScreenWidth();
   renderer.fillRect(0, 0, width, HEADER, false);
   renderer.drawText(UI_12_FONT_ID, 20, 8, tr(STR_PLAY_VOXEL), true, EpdFontFamily::BOLD);
-  renderer.drawText(SMALL_FONT_ID, 20, 38, toast ? toast : tr(STR_VX_HINT));
+  char hint[96];
+  snprintf(hint, sizeof(hint), "%s  |  %s", I18N.get(SHAPE_MENU[shape + 1]), tr(STR_VX_HINT));
+  renderer.drawText(SMALL_FONT_ID, 20, 38, toast ? toast : hint);
   const char* name = I18N.get(NAMES[selected]);
   const int nameWidth = renderer.getTextWidth(UI_10_FONT_ID, name, EpdFontFamily::BOLD);
   renderer.drawText(UI_10_FONT_ID, width - 54 - nameWidth, 10, name, true, EpdFontFamily::BOLD);
@@ -763,16 +882,85 @@ void VoxelActivity::drawHeader() const {
 void VoxelActivity::drawMenu() const {
   const int width = renderer.getScreenWidth();
   constexpr int ROW = 44;
-  const int boxW = 300, boxH = ROW * MENU_ITEMS + 20;
+  const int count = shapeMenu ? SHAPE_COUNT + 1 : MENU_ITEMS;
+  const StrId* items = shapeMenu ? SHAPE_MENU : MENU;
+  const int boxW = 300, boxH = ROW * count + 20;
   const int x = (width - boxW) / 2, y = (renderer.getScreenHeight() - boxH) / 2;
   renderer.fillRoundedRect(x, y, boxW, boxH, 10, Color::White);
   renderer.drawRoundedRect(x, y, boxW, boxH, 2, 10, true);
-  for (int i = 0; i < MENU_ITEMS; i++) {
+  for (int i = 0; i < count; i++) {
     const int ry = y + 10 + i * ROW;
-    if (i == menuIndex) renderer.fillRoundedRect(x + 10, ry, boxW - 20, ROW - 4, 6, Color::Black);
-    renderer.drawText(UI_12_FONT_ID, x + 26, ry + 8, I18N.get(MENU[i]), i != menuIndex,
-                      i == menuIndex ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    const bool focused = i == menuIndex;
+    if (focused) renderer.fillRoundedRect(x + 10, ry, boxW - 20, ROW - 4, 6, Color::Black);
+    renderer.drawText(UI_12_FONT_ID, x + 26, ry + 8, I18N.get(items[i]), !focused,
+                      focused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    if (!shapeMenu && i == 2) {  // "New island" opens a submenu
+      const int ax = x + boxW - 34, ay = ry + ROW / 2 - 2;
+      const int tx[3] = {ax, ax, ax + 8}, ty[3] = {ay - 7, ay + 7, ay};
+      renderer.fillPolygon(tx, ty, 3, !focused);
+    }
   }
+}
+
+// A bold arrow centred on (cx, cy) along an iso screen diagonal (2:1 slope).
+void VoxelActivity::drawArrow(const int cx, const int cy, const int8_t* dir, const int length) const {
+  const int tipX = cx + dir[0] * length, tipY = cy + dir[1] * length / 2;
+  const int tailX = cx - dir[0] * length, tailY = cy - dir[1] * length / 2;
+  const float ux = dir[0] * 0.894f, uy = dir[1] * 0.447f, head = length * 0.8f;
+  const int bx = tipX - static_cast<int>(ux * head), by = tipY - static_cast<int>(uy * head);
+  const int wx = static_cast<int>(-uy * head * 0.6f), wy = static_cast<int>(ux * head * 0.6f);
+  renderer.drawLine(tailX, tailY, bx, by, 3, true);
+  const int px[3] = {tipX, bx + wx, bx - wx}, py[3] = {tipY, by + wy, by - wy};
+  renderer.fillPolygon(px, py, 3, true);
+}
+
+// Direction cues: arrows inside the Left/Right hint boxes and the side-button
+// hints, plus a compass tile in the corner labelled with each button.
+void VoxelActivity::drawControls() const {
+  const int width = renderer.getScreenWidth(), height = renderer.getScreenHeight();
+  const int hintH = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  const auto labels = mappedInput.mapLabels(tr(STR_VX_REMOVE), tr(STR_VX_PLACE), LEFT_SLOT, RIGHT_SLOT);
+  const char* slots[4] = {labels.btn1, labels.btn2, labels.btn3, labels.btn4};
+  // Mirrors BaseTheme::drawButtonHints' box positions.
+  static constexpr int WIDE[4] = {38, 154, 268, 384}, NARROW[4] = {25, 130, 245, 350};
+  for (int i = 0; i < 4; i++) {
+    if (slots[i] != LEFT_SLOT && slots[i] != RIGHT_SLOT) continue;
+    const int bx = (width >= 528 ? WIDE[i] : NARROW[i]) + 53, by = height - hintH / 2;
+    drawArrow(bx, by, slots[i] == LEFT_SLOT ? ARROW_LEFT : ARROW_RIGHT, 22);
+  }
+  if (!gpio.hasTouch()) {
+    const bool edge = gpio.hasEdgeSideButtons();
+    constexpr int SIDE_W = 34, SIDE_H = 64;
+    const int xs[2] = {edge ? 2 : width - SIDE_W - 2, width - SIDE_W - 2};
+    const int ys[2] = {edge ? 163 : 345, edge ? 163 : 345 + SIDE_H + 6};
+    const int8_t* dirs[2] = {ARROW_UP, ARROW_DOWN};
+    for (int i = 0; i < 2; i++) {
+      renderer.fillRect(xs[i], ys[i], SIDE_W, SIDE_H, false);
+      renderer.drawRect(xs[i], ys[i], SIDE_W, SIDE_H, 1, true);
+      drawArrow(xs[i] + SIDE_W / 2, ys[i] + SIDE_H / 2, dirs[i], 13);
+    }
+  }
+  // Compass: an iso tile with an arrow off each edge, tagged with its button.
+  int cx = 0, cy = 0;
+  compassCentre(cx, cy);
+  renderer.fillRect(cx - 44, cy - 32, 88, 64, false);
+  const int tx[4] = {cx, cx + 14, cx, cx - 14}, ty[4] = {cy - 7, cy, cy + 7, cy};
+  for (int i = 0; i < 4; i++) renderer.drawLine(tx[i], ty[i], tx[(i + 1) % 4], ty[(i + 1) % 4], 1, true);
+  static constexpr StrId KEYS[4] = {StrId::STR_VX_KEY_LEFT, StrId::STR_VX_KEY_RIGHT, StrId::STR_VX_KEY_UP,
+                                    StrId::STR_VX_KEY_DOWN};
+  const int8_t* dirs[4] = {ARROW_LEFT, ARROW_RIGHT, ARROW_UP, ARROW_DOWN};
+  for (int i = 0; i < 4; i++) {
+    const int8_t* d = dirs[i];
+    drawArrow(cx + d[0] * 17, cy + d[1] * 9, d, 7);
+    const char* key = I18N.get(KEYS[i]);
+    const int kw = renderer.getTextWidth(SMALL_FONT_ID, key, EpdFontFamily::BOLD);
+    renderer.drawText(SMALL_FONT_ID, cx + d[0] * 34 - kw / 2, cy + d[1] * 18 - 9, key, true, EpdFontFamily::BOLD);
+  }
+}
+
+void VoxelActivity::compassCentre(int& x, int& y) const {
+  x = 48;
+  y = renderer.getScreenHeight() - UITheme::getInstance().getMetrics().buttonHintsHeight - 40;
 }
 
 bool VoxelActivity::saveWallpaper() {
@@ -793,7 +981,7 @@ bool VoxelActivity::saveWallpaper() {
 
 void VoxelActivity::render(RenderLock&& lock) {
   if (!world) return;
-  static constexpr int REVEAL_LIMITS[REVEAL_STAGES] = {6, 11, H};
+  static constexpr int REVEAL_LIMITS[REVEAL_STAGES] = {4, 8, H};
   const int width = renderer.getScreenWidth();
   const int bottom = renderer.getScreenHeight() - UITheme::getInstance().getMetrics().buttonHintsHeight - 2;
   const Rect area{0, HEADER, width - 1, bottom};
@@ -834,9 +1022,10 @@ void VoxelActivity::render(RenderLock&& lock) {
   if (clean || headerDirty) drawHeader();
   if (clean) {
     const auto labels =
-        mappedInput.mapLabels(tr(STR_VX_REMOVE), tr(STR_VX_PLACE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+        mappedInput.mapLabels(tr(STR_VX_REMOVE), tr(STR_VX_PLACE), LEFT_SLOT, RIGHT_SLOT);
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
+  drawControls();
   if (menuOpen) drawMenu();
   drawnCursor = cursor;
   cursorShown = finished;

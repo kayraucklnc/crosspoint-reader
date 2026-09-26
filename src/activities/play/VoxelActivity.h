@@ -24,8 +24,8 @@ class VoxelActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
 
-  static constexpr int N = 20;  // world is N x N columns
-  static constexpr int H = 16;  // and H levels high
+  static constexpr int N = 16;  // world is N x N columns
+  static constexpr int H = 15;  // and H levels high
 
  private:
   struct Rect {
@@ -37,6 +37,7 @@ class VoxelActivity final : public Activity {
 
   std::unique_ptr<uint8_t[]> world;  // N*N*H materials, index (z * N + y) * N + x
   uint32_t seed = 1;
+  uint8_t shape = 0;
   uint8_t rotation = 0;
   uint8_t selected = 1;
   int curX = N / 2, curY = N / 2, curZ = 0;
@@ -49,6 +50,7 @@ class VoxelActivity final : public Activity {
   int shownStage = REVEAL_STAGES;
   mutable int zLimit = H;  // voxels at or above this level are treated as air
   bool menuOpen = false;
+  bool shapeMenu = false;  // the menu is showing the island-shape list
   bool ignoreRelease = false;
   int menuIndex = 0;
 
@@ -67,7 +69,9 @@ class VoxelActivity final : public Activity {
   uint8_t get(int x, int y, int z) const;
   void set(int x, int y, int z, uint8_t m);
   int columnTop(int x, int y) const;
-  void generate(uint32_t newSeed);
+  void generate(uint32_t newSeed, uint8_t newShape);
+  void fillColumn(int x, int y, int top, int depth);
+  void newIsland(int item);
   void placeCursorZ();
   bool load();
   void save();
@@ -98,5 +102,8 @@ class VoxelActivity final : public Activity {
   void drawCursor(const Rect& clip) const;
   void drawHeader() const;
   void drawMenu() const;
+  void drawArrow(int cx, int cy, const int8_t* dir, int length) const;
+  void drawControls() const;
+  void compassCentre(int& x, int& y) const;
   bool saveWallpaper();
 };
