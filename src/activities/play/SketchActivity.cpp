@@ -21,18 +21,7 @@ constexpr int HEADER_HEIGHT = 58;
 constexpr int INDEX_ENTRY = 16;
 constexpr unsigned long SAVE_HOLD_MS = 800;
 constexpr int PLACEHOLDER_SIZE = 300;
-constexpr int PACK_HEADER = 9;  // "AVT1" + u16 w + u16 h + u8 categories
-
-// Pack categories in drawing order (see scripts/gen_avatars.py).
-enum Category : uint8_t { FACE, NOSE, MOUTH, EYES, BROWS, GLASSES, HAIR, ACCESSORIES, DETAILS, BEARD };
-// The order parts are browsed in, and their names.
-constexpr uint8_t UI_ORDER[] = {FACE, HAIR, EYES, BROWS, NOSE, MOUTH, GLASSES, BEARD, ACCESSORIES, DETAILS};
-constexpr StrId NAMES[] = {StrId::STR_SK_FACE,    StrId::STR_SK_NOSE,  StrId::STR_SK_MOUTH,       StrId::STR_SK_EYES,
-                           StrId::STR_SK_BROWS,   StrId::STR_SK_GLASSES, StrId::STR_SK_HAIR, StrId::STR_SK_ACCESSORIES,
-                           StrId::STR_SK_DETAILS, StrId::STR_SK_BEARD};
-constexpr int UI_COUNT = sizeof(UI_ORDER);
-// Optional parts (index 0 = none) appear on this many out of 100 random faces.
-constexpr uint8_t OPTIONAL_PERCENT[] = {100, 100, 100, 100, 100, 30, 100, 20, 25, 25};
+constexpr int PACK_HEADER = 9;  // "AVT2" + u16 w + u16 h + u8 categories
 
 uint32_t readU32(const uint8_t* p) { return p[0] | p[1] << 8 | p[2] << 16 | static_cast<uint32_t>(p[3]) << 24; }
 int readI16(const uint8_t* p) { return static_cast<int16_t>(p[0] | p[1] << 8); }
@@ -47,16 +36,32 @@ void SketchActivity::onEnter() {
   randomize();
 }
 
+// Header layout is documented in scripts/gen_avatars.py.
 bool SketchActivity::loadPack() {
   HalFile file;
   if (!Storage.exists(PACK_PATH) || !Storage.openFileForRead("SKETCH", PACK_PATH, file)) return false;
-  uint8_t header[PACK_HEADER + MAX_CATEGORIES];
-  if (file.read(header, PACK_HEADER) != PACK_HEADER || memcmp(header, "AVT1", 4) != 0) return false;
+  uint8_t header[PACK_HEADER];
+  if (file.read(header, PACK_HEADER) != PACK_HEADER || memcmp(header, "AVT2", 4) != 0) return false;
   boxW = static_cast<uint16_t>(readU16(header + 4));
   boxH = static_cast<uint16_t>(readU16(header + 6));
   categoryCount = header[8];
-  if (categoryCount != MAX_CATEGORIES || file.read(counts, categoryCount) != categoryCount) return false;
-  return std::all_of(counts, counts + categoryCount, [](const uint8_t c) { return c > 0; });
+  if (categoryCount == 0 || categoryCount > MAX_CATEGORIES) return false;
+  for (int c = 0; c < categoryCount; c++) {
+    uint8_t meta[4];
+    if (file.read(meta, 4) != 4 || meta[0] == 0) return false;
+    counts[c] = meta[0];
+    randomPercent[c] = meta[1];
+    hasNone[c] = meta[2] & 1;
+    char name[MAX_NAME];
+    if (meta[3] >= MAX_NAME || file.read(name, meta[3]) != meta[3]) return false;
+    snprintf(names[c], MAX_NAME, "%.*s", static_cast<int>(meta[3]), name);
+  }
+  if (file.read(uiOrder, categoryCount) != categoryCount) return false;
+  for (int c = 0; c < categoryCount; c++) {
+    if (uiOrder[c] >= categoryCount) return false;
+  }
+  indexBase = static_cast<uint16_t>(file.position());
+  return true;
 }
 
 void SketchActivity::randomize() {
@@ -64,15 +69,14 @@ void SketchActivity::randomize() {
     rng ^= rng << 13;
     rng ^= rng >> 17;
     rng ^= rng << 5;
-    const bool wear = (rng >> 24) % 100 < OPTIONAL_PERCENT[i];
-    choice[i] = wear && counts[i] > 1 ? static_cast<uint8_t>(OPTIONAL_PERCENT[i] < 100 ? 1 + rng % (counts[i] - 1)
-                                                                                         : rng % counts[i])
-                                      : 0;
+    const int first = hasNone[i] ? 1 : 0;
+    const bool wear = (rng >> 24) % 100 < randomPercent[i] && counts[i] > first;
+    choice[i] = wear ? static_cast<uint8_t>(first + rng % (counts[i] - first)) : 0;
   }
   requestUpdate();
 }
 
-int SketchActivity::category() const { return UI_ORDER[part]; }
+int SketchActivity::category() const { return uiOrder[part]; }
 
 void SketchActivity::cycle(const int delta) {
   const int c = category();
@@ -99,11 +103,11 @@ void SketchActivity::loop() {
   if (mappedInput.wasPressed(B::Left)) cycle(-1);
   if (mappedInput.wasPressed(B::Right)) cycle(+1);
   if (mappedInput.wasPressed(B::Up)) {
-    part = static_cast<uint8_t>((part + UI_COUNT - 1) % UI_COUNT);
+    part = static_cast<uint8_t>((part + categoryCount - 1) % categoryCount);
     requestUpdate();
   }
   if (mappedInput.wasPressed(B::Down)) {
-    part = static_cast<uint8_t>((part + 1) % UI_COUNT);
+    part = static_cast<uint8_t>((part + 1) % categoryCount);
     requestUpdate();
   }
   if (previousToast && !toast) toast = previousToast;  // keep "Saved" until something changes
@@ -113,7 +117,6 @@ void SketchActivity::loop() {
 void SketchActivity::drawAvatar(const int x, const int y) const {
   HalFile file;
   if (!Storage.openFileForRead("SKETCH", PACK_PATH, file)) return;
-  const int indexBase = PACK_HEADER + categoryCount;
   int first = 0;
   for (int c = 0; c < categoryCount; first += counts[c], c++) {
     uint8_t entry[INDEX_ENTRY];
@@ -168,11 +171,16 @@ void SketchActivity::drawHeader() const {
   if (!packReady) return;
   const int c = category();
   char text[48];
-  snprintf(text, sizeof(text), "%s  %d/%d", I18N.get(NAMES[c]), choice[c] + 1, counts[c]);
+  if (hasNone[c] && choice[c] == 0) {
+    snprintf(text, sizeof(text), "%s  -", names[c]);
+  } else {
+    const int offset = hasNone[c] ? 0 : 1;
+    snprintf(text, sizeof(text), "%s  %d/%d", names[c], choice[c] + offset, counts[c] + offset - 1);
+  }
   const int w = renderer.getTextWidth(UI_12_FONT_ID, text, EpdFontFamily::BOLD);
   renderer.drawText(UI_12_FONT_ID, width - w - 20, 16, text, true, EpdFontFamily::BOLD);
-  for (int i = 0; i < UI_COUNT; i++) {
-    const int x = width - 20 - (UI_COUNT - i) * 14;
+  for (int i = 0; i < categoryCount; i++) {
+    const int x = width - 20 - (categoryCount - i) * 14;
     if (i == part) {
       renderer.fillRect(x, 48, 10, 4, true);
     } else {
