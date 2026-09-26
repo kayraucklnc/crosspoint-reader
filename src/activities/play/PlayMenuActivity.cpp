@@ -7,6 +7,8 @@
 #include "MappedInputManager.h"
 #include "SketchActivity.h"
 #include "SnakeActivity.h"
+#include "SokobanActivity.h"
+#include "SokobanArt.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -31,6 +33,9 @@ void PlayMenuActivity::open() {
       break;
     case 1:
       game = makeUniqueNoThrow<BlackjackActivity>(renderer, mappedInput);
+      break;
+    case 3:
+      game = makeUniqueNoThrow<SokobanActivity>(renderer, mappedInput);
       break;
     default:
       game = makeUniqueNoThrow<SketchActivity>(renderer, mappedInput);
@@ -80,6 +85,22 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
       renderer.drawText(SMALL_FONT_ID, x + 14, y + 16, "K", true, EpdFontFamily::BOLD);
       break;
     }
+    case 3: {
+      // A walled corridor: keeper, crate, goal - drawn with the game's own tiles.
+      static constexpr uint8_t ROW[3] = {
+          sokoban::CELL_FLOOR | sokoban::CELL_PLAYER | (sokoban::RIGHT << sokoban::FACING_SHIFT),
+          sokoban::CELL_FLOOR | sokoban::CELL_BOX, sokoban::CELL_FLOOR | sokoban::CELL_GOAL};
+      constexpr int T = 24;
+      for (int i = 0; i < 3; i++) {
+        // Walls: open to the corridor and the card, closed between neighbours.
+        const int ends = (i == 0 ? 1 << sokoban::LEFT : 0) | (i == 2 ? 1 << sokoban::RIGHT : 0);
+        const uint8_t open = 1 << sokoban::UP | 1 << sokoban::DOWN | ends;
+        sokoban::drawTile(renderer, x + i * T, y, T, sokoban::CELL_WALL, x, y, open);
+        sokoban::drawTile(renderer, x + i * T, y + T, T, ROW[i], x, y);
+        sokoban::drawTile(renderer, x + i * T, y + 2 * T, T, sokoban::CELL_WALL, x, y, open);
+      }
+      break;
+    }
     default: {
       // A quick pencil face.
       const int c = size / 2;
@@ -98,9 +119,9 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
 void PlayMenuActivity::renderItem(const int index, const int x, const int y, const int width,
                                   const int height) const {
   static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_BLACKJACK,
-                                                StrId::STR_PLAY_SKETCH};
+                                                StrId::STR_PLAY_SKETCH, StrId::STR_PLAY_SOKOBAN};
   static constexpr StrId DESCRIPTIONS[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE_DESC, StrId::STR_PLAY_BLACKJACK_DESC,
-                                                     StrId::STR_PLAY_SKETCH_DESC};
+                                                     StrId::STR_PLAY_SKETCH_DESC, StrId::STR_PLAY_SOKOBAN_DESC};
   const bool focused = index == selected;
   renderer.drawRoundedRect(x, y, width, height, focused ? FOCUS_FRAME : 1, 10, true);
   const int glyphY = y + (height - GLYPH) / 2;
