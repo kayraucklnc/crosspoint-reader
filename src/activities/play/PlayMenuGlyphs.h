@@ -13,5 +13,6 @@ void sketch(const GfxRenderer& renderer, int x, int y, int size);
 void sokoban(const GfxRenderer& renderer, int x, int y, int size);
 void game2048(const GfxRenderer& renderer, int x, int y, int size);
 void voxel(const GfxRenderer& renderer, int x, int y, int size);
+void wordle(const GfxRenderer& renderer, int x, int y, int size);
 
 }  // namespace play::glyphs

@@ -1,5 +1,7 @@
 #include "PlayMenuGlyphs.h"
 
+#include <algorithm>
+
 #include <cstdint>
 
 #include "Game2048Art.h"
@@ -74,6 +76,24 @@ void voxel(const GfxRenderer& renderer, const int x, const int y, const int size
   renderer.drawLine(c - 26, t + 13, c - 26, t + 43, 2, true);
   renderer.drawLine(c - 26, t + 43, c, t + 56, 2, true);
   renderer.drawLine(c, t + 26, c, t + 56, 2, true);
+}
+
+void wordle(const GfxRenderer& renderer, const int x, const int y, int /*size*/) {
+  // Solved, misplaced and unused tiles.
+  constexpr int TILE = 32;
+  static constexpr uint8_t LOOK[4] = {2, 1, 0, 2};  // 2 solid, 1 hatched, 0 outline
+  for (int i = 0; i < 4; i++) {
+    const int tx = x + 4 + (i % 2) * (TILE + 4), ty = y + 4 + (i / 2) * (TILE + 4);
+    if (LOOK[i] == 2) {
+      renderer.fillRoundedRect(tx, ty, TILE, TILE, 4, Color::Black);
+      continue;
+    }
+    renderer.drawRoundedRect(tx, ty, TILE, TILE, LOOK[i] ? 2 : 1, 4, true);
+    for (int d = 6; LOOK[i] && d < 2 * TILE - 4; d += 6) {
+      renderer.drawLine(tx + std::max(2, d - TILE + 2), ty + std::min(d, TILE - 2), tx + std::min(d, TILE - 2),
+                        ty + std::max(2, d - TILE + 2), true);
+    }
+  }
 }
 
 }  // namespace play::glyphs

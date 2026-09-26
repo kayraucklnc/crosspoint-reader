@@ -15,6 +15,7 @@
 #include "SnakeActivity.h"
 #include "SokobanActivity.h"
 #include "VoxelActivity.h"
+#include "WordleActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -33,6 +34,7 @@ constexpr PlayMenuActivity::Entry GAMES[] = {
     {StrId::STR_PLAY_2048, StrId::STR_PLAY_2048_DESC, &glyphs::game2048, &make<Game2048Activity>},
     {StrId::STR_PLAY_MINES, StrId::STR_PLAY_MINES_DESC, &MinesweeperActivity::drawMenuIcon, &make<MinesweeperActivity>},
     {StrId::STR_PLAY_SOKOBAN, StrId::STR_PLAY_SOKOBAN_DESC, &glyphs::sokoban, &make<SokobanActivity>},
+    {StrId::STR_PLAY_WORDLE, StrId::STR_PLAY_WORDLE_DESC, &glyphs::wordle, &make<WordleActivity>},
     {StrId::STR_PLAY_BLACKJACK, StrId::STR_PLAY_BLACKJACK_DESC, &glyphs::blackjack, &make<BlackjackActivity>},
     {StrId::STR_PLAY_VOXEL, StrId::STR_PLAY_VOXEL_DESC, &glyphs::voxel, &make<VoxelActivity>},
     {StrId::STR_PLAY_SKETCH, StrId::STR_PLAY_SKETCH_DESC, &glyphs::sketch, &make<SketchActivity>},
