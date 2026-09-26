@@ -23,6 +23,8 @@ class TrainsActivity final : public Activity {
     return state == State::CONNECTING || state == State::LOADING || state == State::LOADING_ALERTS;
   }
   void render(RenderLock&&) override;
+  bool hasSleepSnapshot() const override { return hasBoard; }
+  void renderSleepSnapshot() override;
 
  private:
   enum class State { CONNECTING, PICKING, LOADING, LOADING_ALERTS, READY, ERROR };
@@ -42,6 +44,9 @@ class TrainsActivity final : public Activity {
   int scroll = 0;
   bool wifiStartedHere = false;
   bool firstRenderDone = false;
+  // Sleep snapshot: countdowns would go stale, so the board shows scheduled
+  // times and delays only, without the station strip or button hints.
+  bool frozen = false;
   GfxRenderer::Orientation savedOrientation = GfxRenderer::Orientation::Portrait;
 
   void buildStrip();
@@ -54,6 +59,7 @@ class TrainsActivity final : public Activity {
   bool viewingReturn() const { return board.origin != config.origin || board.towards != config.towards; }
   void showDefault() { showBoard(config.origin, config.towards); }
 
+  void drawPage();
   void renderHeader(int x, int y, int width) const;
   // Strike banner (today) or line (within 3 days); returns the height used.
   int renderStrike(int x, int y, int width, time_t now) const;

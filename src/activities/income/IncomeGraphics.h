@@ -13,7 +13,7 @@ void fillDither(const GfxRenderer& renderer, int x, int y, int w, int h, int lev
 // Width in pixels of `text` drawn with pixelSize-sized blocks.
 int pixelTextWidth(const char* text, int pixelSize);
 
-// Chunky 5x7 pixel digits ("0-9$,.-") as solid blocks with a dithered drop shadow.
+// Chunky 5x7 pixel digits ("0-9$,.-:") as solid blocks with a dithered drop shadow.
 void drawPixelText(const GfxRenderer& renderer, int x, int y, const char* text, int pixelSize);
 
 // Small-caps style label: uppercase text with extra letter spacing.

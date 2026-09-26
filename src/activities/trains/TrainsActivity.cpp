@@ -14,6 +14,7 @@
 #include "WifiCredentialStore.h"
 #include "activities/income/IncomeGraphics.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "components/SleepSnapshot.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/NetworkTime.h"
@@ -269,6 +270,8 @@ void TrainsActivity::runAlerts() {
 }
 
 void TrainsActivity::loop() {
+  // Going to sleep: no more network steps or input once the snapshot is up.
+  if (frozen) return;
   // Each network step shows its status before blocking.
   if (state == State::CONNECTING) {
     requestUpdateAndWait();
@@ -322,28 +325,46 @@ void TrainsActivity::loop() {
 }
 
 void TrainsActivity::render(RenderLock&&) {
-  const int width = renderer.getScreenWidth();
-  const int height = renderer.getScreenHeight();
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const bool landscape = width > height;
-  const int contentWidth = (landscape ? width - metrics.buttonHintsHeight : width) - MARGIN * 2;
-  const int contentBottom = landscape ? height : height - metrics.buttonHintsHeight;
-  const time_t now = network_time::current();  // 0 when the clock is unknown
-  renderer.clearScreen();
-
-  renderHeader(MARGIN, MARGIN - 6, contentWidth);
-  const int heroTop = MARGIN + (contentWidth >= 600 ? 34 : 56);
-  const int strikeHeight = renderStrike(MARGIN, heroTop - 6, contentWidth, now);
-  const int heroBottom = renderHero(MARGIN, heroTop + strikeHeight, contentWidth, now);
-  const int stripY = contentBottom - STRIP_HEIGHT - 10;
-  renderList(MARGIN, heroBottom + 20, contentWidth, stripY - heroBottom - 30, now);
-  renderStrip(stripY, contentWidth);
-
+  if (frozen) return;  // a queued live frame must not replace the sleep snapshot
+  drawPage();
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   // After the first frame only small regions change; a fast refresh avoids the full-screen flash.
   renderer.displayBuffer(firstRenderDone ? HalDisplay::FAST_REFRESH : HalDisplay::HALF_REFRESH);
   firstRenderDone = true;
+}
+
+void TrainsActivity::renderSleepSnapshot() {
+  frozen = true;
+  drawPage();
+  sleep_snapshot::drawFrame(renderer);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+}
+
+void TrainsActivity::drawPage() {
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const bool landscape = width > height;
+  const int hints = frozen ? 0 : metrics.buttonHintsHeight;
+  const int contentWidth = (landscape ? width - hints : width) - MARGIN * 2;
+  const int contentBottom = landscape ? height : height - hints;
+  const time_t now = network_time::current();  // 0 when the clock is unknown
+  renderer.clearScreen();
+
+  renderHeader(MARGIN, MARGIN - 6, contentWidth);
+  const int heroTop = MARGIN + (contentWidth >= 600 ? 34 : (frozen ? 64 : 56));
+  const int strikeHeight = renderStrike(MARGIN, heroTop - 6, contentWidth, now);
+  const int heroBottom = renderHero(MARGIN, heroTop + strikeHeight, contentWidth, now);
+  if (frozen) {
+    // No strip to pick from while asleep; the list takes its room.
+    const int listBottom = contentBottom - MARGIN;
+    renderList(MARGIN, heroBottom + 20, contentWidth, listBottom - heroBottom - 20, now);
+    return;
+  }
+  const int stripY = contentBottom - STRIP_HEIGHT - 10;
+  renderList(MARGIN, heroBottom + 20, contentWidth, stripY - heroBottom - 30, now);
+  renderStrip(stripY, contentWidth);
 }
 
 void TrainsActivity::renderHeader(const int x, const int y, const int width) const {
@@ -356,10 +377,24 @@ void TrainsActivity::renderHeader(const int x, const int y, const int width) con
   income_gfx::drawTrackedLabel(renderer, UI_10_FONT_ID, x, y, route, TRACKING);
   // Portrait has no room beside the route; the status gets its own line.
   const bool wide = width >= 600;
-  renderStatus(x, wide ? y + 2 : y + 26, width);
+  if (wide && frozen) {
+    // The asleep badge may only use what the route leaves free (it stacks when that is too narrow).
+    const int routeWidth = income_gfx::trackedLabelWidth(renderer, UI_10_FONT_ID, route, TRACKING) + 24;
+    renderStatus(x + routeWidth, y + 2, width - routeWidth);
+  } else if (wide) {
+    renderStatus(x, y + 2, width);
+  } else {
+    renderStatus(x, y + (frozen ? 30 : 26), width);  // the asleep badge is taller than a text line
+  }
 }
 
 void TrainsActivity::renderStatus(const int x, const int y, const int width) const {
+  if (frozen) {
+    char clock[8];
+    clockText(board.fetchedAt, clock, sizeof(clock));
+    sleep_snapshot::drawBadge(renderer, x, y - 4, width, true, clock);
+    return;
+  }
   if (state == State::CONNECTING || state == State::LOADING || state == State::LOADING_ALERTS ||
       state == State::PICKING) {
     const bool fetching = state == State::LOADING || state == State::LOADING_ALERTS;
@@ -438,24 +473,40 @@ int TrainsActivity::renderHero(const int x, const int y, const int width, const 
     return y + heroHeight;
   }
   const trenord::Departure& next = board.departures[firstLive];
-  const int countdown = countdownMinutes(next, now, board.fetchedAt);
-  char minutes[8];
-  snprintf(minutes, sizeof(minutes), countdown < 0 ? "--" : "%d", countdown);
-  income_gfx::drawPixelText(renderer, x, y, minutes, PIXEL);
-  const int minutesWidth = income_gfx::pixelTextWidth(minutes, PIXEL);
-  renderer.drawText(UI_12_FONT_ID, x + minutesWidth + 14, y + heroHeight - 34, tr(STR_TRAINS_MIN), true,
-                    EpdFontFamily::BOLD);
-
-  // Detail block beside the countdown, or under it on narrow screens.
   const bool wide = width >= 600;
-  const int detailX = wide ? x + std::max(minutesWidth + 80, width / 3) : x;
-  const int detailY = wide ? y : y + heroHeight + 14;
   char clock[8];
   clockText(next.scheduled, clock, sizeof(clock));
   char delay[24];
   delayText(next, delay, sizeof(delay));
+
+  // Asleep, the hero is the departure time: a countdown would go stale on the panel.
+  char big[8];
+  int pixel = PIXEL;
+  if (frozen) {
+    snprintf(big, sizeof(big), "%s", clock);
+    if (wide) pixel = 10;  // leaves the detail block its usual width
+  } else {
+    const int countdown = countdownMinutes(next, now, board.fetchedAt);
+    snprintf(big, sizeof(big), countdown < 0 ? "--" : "%d", countdown);
+  }
+  income_gfx::drawPixelText(renderer, x, y, big, pixel);
+  const int bigWidth = income_gfx::pixelTextWidth(big, pixel);
+  if (!frozen) {
+    renderer.drawText(UI_12_FONT_ID, x + bigWidth + 14, y + heroHeight - 34, tr(STR_TRAINS_MIN), true,
+                      EpdFontFamily::BOLD);
+  }
+
+  // Detail block beside the hero number, or under it on narrow screens.
+  const int detailX = wide ? x + (frozen ? bigWidth + 48 : std::max(bigWidth + 80, width / 3)) : x;
+  const int detailY = wide ? y : y + heroHeight + 14;
   char line[64];
-  snprintf(line, sizeof(line), "%s  %s", clock, delay);
+  if (frozen) {
+    snprintf(line, sizeof(line), "%s", delay);
+  } else {
+    snprintf(line, sizeof(line), "%s  %s", clock, delay);
+  }
+  // Asleep with no delay reported, the train line moves up into the empty first line.
+  const int lift = line[0] ? 0 : 40;
   renderer.drawText(NOTOSANS_18_FONT_ID, detailX, detailY - 4, line, true, EpdFontFamily::BOLD);
 
   char train[20];
@@ -463,7 +514,7 @@ int TrainsActivity::renderHero(const int x, const int y, const int width, const 
   char direction[28];
   directionLabel(next, direction, sizeof(direction));
   snprintf(line, sizeof(line), direction[0] ? "%s  >  %s" : "%s", train, direction);
-  renderer.drawText(UI_12_FONT_ID, detailX, detailY + 36, line);
+  renderer.drawText(UI_12_FONT_ID, detailX, detailY + 36 - lift, line);
   const trenord_alerts::Notice* notice = cache.alerts.forTrain(next.number);
   if (notice) {
     // The notice's own words, cut to one line: "! Il treno 24556 ... non è ancora partito ..."
@@ -476,14 +527,14 @@ int TrainsActivity::renderHero(const int x, const int y, const int width, const 
     snprintf(reason, sizeof(reason), "! %s", text);
     char lines[1][96];
     income_gfx::wrapText(renderer, UI_10_FONT_ID, reason, width - (detailX - x), lines, 1);
-    renderer.drawText(UI_10_FONT_ID, detailX, detailY + 66, lines[0], true, EpdFontFamily::BOLD);
+    renderer.drawText(UI_10_FONT_ID, detailX, detailY + 66 - lift, lines[0], true, EpdFontFamily::BOLD);
   } else if (next.platform[0]) {
     snprintf(line, sizeof(line), "%s %s", tr(STR_TRAINS_PLATFORM), next.platform);
-    renderer.drawText(UI_10_FONT_ID, detailX, detailY + 66, line, true, EpdFontFamily::BOLD);
+    renderer.drawText(UI_10_FONT_ID, detailX, detailY + 66 - lift, line, true, EpdFontFamily::BOLD);
   }
   if (next.cancelled) {
-    // Strike the countdown so a cancelled train never reads as catchable.
-    renderer.fillRect(x - 4, y + heroHeight / 2 - 2, minutesWidth + 8, 5, true);
+    // Strike the hero number so a cancelled train never reads as catchable.
+    renderer.fillRect(x - 4, y + (pixel * 7) / 2 - 2, bigWidth + 8, 5, true);
   }
   return wide ? y + heroHeight : detailY + 90;
 }
@@ -494,11 +545,13 @@ void TrainsActivity::renderList(const int x, const int y, const int width, const
   const int first = firstUpcoming(now) + 1 + scroll;
   // Column positions: time, countdown, delay, train, destination, platform.
   // Narrow (portrait) screens drop the countdown column; the hero carries it.
+  // The sleep snapshot drops it too: times and delays stay true, countdowns don't.
   const bool wide = width >= 600;
+  const bool countdowns = wide && !frozen;
   const int colIn = x + 70;
-  const int colDelay = wide ? x + 160 : x + 70;
-  const int colTrain = wide ? x + 270 : x + 160;
-  const int colDest = wide ? x + 380 : x + 250;
+  const int colDelay = countdowns ? x + 160 : x + (wide ? 80 : 70);
+  const int colTrain = countdowns ? x + 270 : x + (wide ? 200 : 160);
+  const int colDest = countdowns ? x + 380 : x + (wide ? 320 : 250);
   for (int r = 0; r < rows && first + r < board.count; r++) {
     const trenord::Departure& d = board.departures[first + r];
     const int rowY = y + r * ROW_HEIGHT;
@@ -507,7 +560,7 @@ void TrainsActivity::renderList(const int x, const int y, const int width, const
     char text[48];
     clockText(d.scheduled, text, sizeof(text));
     renderer.drawText(UI_12_FONT_ID, x, rowY, text, true, EpdFontFamily::BOLD);
-    if (wide) {
+    if (countdowns) {
       const int countdown = countdownMinutes(d, now, board.fetchedAt);
       if (countdown < 0) {
         snprintf(text, sizeof(text), "-");

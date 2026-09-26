@@ -263,6 +263,8 @@ static bool loadSleepFrameBuffer() {
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
+  APP_STATE.lastSleepApp = activityManager.sleepSnapshotApp();
+  const bool keepSnapshot = APP_STATE.lastSleepApp != CrossPointState::SLEEP_APP_NONE;
 
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -277,7 +279,7 @@ void enterDeepSleep(bool fromTimeout = false) {
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
   deepSleepInProgress = true;
-  activityManager.goToSleep(fromTimeout);
+  activityManager.goToSleep(fromTimeout, keepSnapshot);
 
   if (isQuickResumeSleep) {
     saveSleepFrameBuffer();
@@ -549,6 +551,15 @@ void setup() {
     // through to the sleep-wake "resume reader" logic, which fires on stale
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
+  } else if (resume == BootResume::SplashlessWake && APP_STATE.lastSleepApp != CrossPointState::SLEEP_APP_NONE &&
+             !mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
+    // The dashboard stayed on the panel as a frozen snapshot: reopen it live.
+    // Its first paint is a HALF refresh, which cleans the retained frame.
+    if (APP_STATE.lastSleepApp == CrossPointState::SLEEP_APP_INCOME) {
+      activityManager.goToIncome();
+    } else {
+      activityManager.goToTrains();
+    }
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity

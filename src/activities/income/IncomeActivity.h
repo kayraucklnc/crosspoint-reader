@@ -18,6 +18,8 @@ class IncomeActivity final : public Activity {
   void loop() override;
   bool skipLoopDelay() override { return state == State::CONNECTING || state == State::LOADING; }
   void render(RenderLock&&) override;
+  bool hasSleepSnapshot() const override { return hasSummary && state != State::NO_KEY; }
+  void renderSleepSnapshot() override;
 
  private:
   // PICKING: the WiFi picker is open because no saved network could be joined.
@@ -28,6 +30,8 @@ class IncomeActivity final : public Activity {
   bool hasSummary = false;
   bool wifiStartedHere = false;
   bool firstRenderDone = false;
+  // Sleep snapshot: no button hints, and the status line becomes the asleep badge.
+  bool frozen = false;
   GfxRenderer::Orientation savedOrientation = GfxRenderer::Orientation::Portrait;
 
   static StripeClient::Amount amountMode();

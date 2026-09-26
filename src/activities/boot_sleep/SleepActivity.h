@@ -8,8 +8,10 @@ class HalFile;
 
 class SleepActivity final : public Activity {
  public:
-  explicit SleepActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool fromTimeout = false)
-      : Activity("Sleep", renderer, mappedInput), fromTimeout(fromTimeout) {}
+  // keepSnapshot: the outgoing activity already put its frozen snapshot on the panel.
+  explicit SleepActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool fromTimeout = false,
+                         bool keepSnapshot = false)
+      : Activity("Sleep", renderer, mappedInput), fromTimeout(fromTimeout), keepSnapshot(keepSnapshot) {}
   void onEnter() override;
 
  private:
@@ -25,4 +27,5 @@ class SleepActivity final : public Activity {
   void renderBlankSleepScreen() const;
 
   bool fromTimeout = false;
+  bool keepSnapshot = false;
 };

@@ -17,6 +17,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "WifiCredentialStore.h"
 #include "network/WifiAutoConnect.h"
+#include "components/SleepSnapshot.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -149,6 +150,8 @@ void IncomeActivity::runFetch() {
 }
 
 void IncomeActivity::loop() {
+  // Going to sleep: no more network steps or input once the snapshot is up.
+  if (frozen) return;
   // Each step shows its status before blocking on the network.
   if (state == State::CONNECTING) {
     requestUpdateAndWait();
@@ -172,6 +175,7 @@ void IncomeActivity::loop() {
 }
 
 void IncomeActivity::render(RenderLock&&) {
+  if (frozen) return;  // a queued live frame must not replace the sleep snapshot
   renderer.clearScreen();
   if (state == State::NO_KEY) {
     renderMessage(tr(STR_INCOME_NO_KEY), tr(STR_INCOME_NO_KEY_HINT));
@@ -185,6 +189,14 @@ void IncomeActivity::render(RenderLock&&) {
   firstRenderDone = true;
 }
 
+void IncomeActivity::renderSleepSnapshot() {
+  frozen = true;
+  renderer.clearScreen();
+  renderDashboard(renderer.getScreenWidth(), renderer.getScreenHeight());
+  sleep_snapshot::drawFrame(renderer);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+}
+
 void IncomeActivity::renderMessage(const char* title, const char* detail) const {
   const int midY = renderer.getScreenHeight() / 2;
   renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, title, true, EpdFontFamily::BOLD);
@@ -195,8 +207,9 @@ void IncomeActivity::renderDashboard(const int width, const int height) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Button hints sit along the physical bottom edge: the right side in landscape.
   const bool landscape = width > height;
-  const int contentWidth = (landscape ? width - metrics.buttonHintsHeight : width) - MARGIN * 2;
-  const int contentBottom = (landscape ? height : height - metrics.buttonHintsHeight) - MARGIN;
+  const int hints = frozen ? 0 : metrics.buttonHintsHeight;  // the snapshot shows no button hints
+  const int contentWidth = (landscape ? width - hints : width) - MARGIN * 2;
+  const int contentBottom = (landscape ? height : height - hints) - MARGIN;
 
   const int heroBottom = renderHero(MARGIN, MARGIN, contentWidth, landscape);
   const int chartY = heroBottom + (landscape ? MARGIN / 2 : MARGIN * 2);
@@ -250,6 +263,14 @@ int IncomeActivity::renderStatus(const int x, const int y, const int width, cons
     const int w = renderer.getTextWidth(SMALL_FONT_ID, text);
     renderer.drawText(SMALL_FONT_ID, alignRight ? x + width - w : x, lineY, text);
   };
+
+  if (frozen) {
+    char clock[8];
+    struct tm local;
+    localtime_r(&summary.fetchedAt, &local);
+    strftime(clock, sizeof(clock), "%H:%M", &local);
+    return sleep_snapshot::drawBadge(renderer, x, y, width, alignRight, clock);
+  }
 
   if (state == State::CONNECTING || state == State::LOADING || state == State::PICKING) {
     const bool fetching = state == State::LOADING;

@@ -91,7 +91,8 @@ class ActivityManager {
   void goToLibrary();
   void goToBrowser();
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
-  void goToSleep(bool fromTimeout = false);
+  // keepSnapshot: the current activity's frozen snapshot replaces the sleep screen.
+  void goToSleep(bool fromTimeout = false, bool keepSnapshot = false);
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
   void goToCrashReport();
@@ -107,6 +108,9 @@ class ActivityManager {
   bool preventAutoSleep() const;
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
+  // CrossPointState::SleepApp of the dashboard that will stay on the panel
+  // through sleep, or SLEEP_APP_NONE when the regular sleep screen applies.
+  uint8_t sleepSnapshotApp() const;
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
