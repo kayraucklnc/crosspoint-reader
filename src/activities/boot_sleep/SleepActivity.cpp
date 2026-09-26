@@ -505,6 +505,9 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
+  // The snapshot is already displayed in its own polarity; drawing anything
+  // else would replace it.
+  if (keepSnapshot) return;
   ordered_dither::mode = SETTINGS.imageDithering;
 
   const bool renderQuickResume =

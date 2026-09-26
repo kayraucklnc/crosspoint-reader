@@ -236,6 +236,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &CrossPointSettings::quickResumeSleepScreen,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
                           StrId::STR_CAT_DISPLAY),
+        SettingInfo::Toggle(StrId::STR_KEEP_APP_ON_SLEEP, &CrossPointSettings::keepAppOnSleep, "keepAppOnSleep",
+                            StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_IMAGE_DITHERING, &CrossPointSettings::imageDithering,
                           {StrId::STR_DITHER_BAYER, StrId::STR_DITHER_DIFFUSION}, "imageDithering",
                           StrId::STR_CAT_DISPLAY),

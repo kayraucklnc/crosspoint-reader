@@ -11,6 +11,7 @@
 #include <algorithm>
 
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
@@ -20,6 +21,7 @@
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "income/IncomeActivity.h"
+#include "play/PlayMenuActivity.h"
 #include "trains/TrainsActivity.h"
 #include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
@@ -268,6 +270,8 @@ void ActivityManager::goToIncome() { replaceActivity(std::make_unique<IncomeActi
 
 void ActivityManager::goToTrains() { replaceActivity(std::make_unique<TrainsActivity>(renderer, mappedInput)); }
 
+void ActivityManager::goToPlay() { replaceActivity(std::make_unique<PlayMenuActivity>(renderer, mappedInput)); }
+
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToFileBrowser(std::string path) {
@@ -315,8 +319,13 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
   }
 }
 
-void ActivityManager::goToSleep(bool fromTimeout) {
-  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout));
+void ActivityManager::goToSleep(bool fromTimeout, bool keepSnapshot) {
+  if (keepSnapshot && currentActivity) {
+    // Drawn before the activity exits: onExit() restores the orientation it rendered in.
+    RenderLock lock;
+    currentActivity->renderSleepSnapshot();
+  }
+  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout, keepSnapshot));
   loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
 }
 
@@ -343,6 +352,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::INCOME;
     } else if (activityName == "Trains") {
       initialMenuItem = HomeMenuItem::TRAINS;
+    } else if (activityName == "Play") {
+      initialMenuItem = HomeMenuItem::PLAY;
     }
   }
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh));
@@ -374,6 +385,16 @@ bool ActivityManager::preventAutoSleep() const { return currentActivity && curre
 
 bool ActivityManager::requiresExclusiveStorageLoop() const {
   return currentActivity && currentActivity->requiresExclusiveStorageLoop();
+}
+
+uint8_t ActivityManager::sleepSnapshotApp() const {
+  // Only the top activity: a pushed WiFi picker over a dashboard sleeps normally.
+  if (!SETTINGS.keepAppOnSleep || !currentActivity || !currentActivity->hasSleepSnapshot()) {
+    return CrossPointState::SLEEP_APP_NONE;
+  }
+  if (currentActivity->name == "Income") return CrossPointState::SLEEP_APP_INCOME;
+  if (currentActivity->name == "Trains") return CrossPointState::SLEEP_APP_TRAINS;
+  return CrossPointState::SLEEP_APP_NONE;
 }
 
 bool ActivityManager::isReaderActivity() const {

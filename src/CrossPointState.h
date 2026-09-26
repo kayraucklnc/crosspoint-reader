@@ -12,6 +12,9 @@ class CrossPointState : public PersistableStore<CrossPointState> {
 
  public:
   static constexpr uint8_t SLEEP_RECENT_COUNT = 16;
+  // Dashboard left on the panel as a frozen snapshot during the last sleep;
+  // waking reopens it.
+  enum SleepApp : uint8_t { SLEEP_APP_NONE = 0, SLEEP_APP_INCOME = 1, SLEEP_APP_TRAINS = 2 };
 
   std::string openEpubPath;
   uint16_t recentSleepImages[SLEEP_RECENT_COUNT] = {};
@@ -22,6 +25,7 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   uint8_t recentOverlaySleepFill = 0;
   uint8_t readerActivityLoadCount = 0;
   bool lastSleepFromReader = false;
+  uint8_t lastSleepApp = SLEEP_APP_NONE;
   bool showBootScreen = true;
 
   static const char* getFilePath() { return "/.crosspoint/state.json"; }

@@ -25,6 +25,7 @@ class HalTiltSensor {
   bool _hadActivity = false;       // Non-consuming flag for sleep timer
   bool _inTilt = false;            // Currently tilted past threshold
   bool _isAwake = false;           // Tracks power state
+  bool _accelHeld = false;         // A game holds the IMU awake for raw accel reads
   unsigned long _initMs = 0;       // Timestamp of sensor init
   unsigned long _lastTiltMs = 0;   // Debounce / cooldown
   unsigned long _wakeMs = 0;       // Timestamp of last wake() for stabilization
@@ -70,4 +71,12 @@ class HalTiltSensor {
 
   // Discard any pending tilt events (call when leaving reader or disabling tilt).
   void clearPendingEvents();
+
+  // Raw acceleration for Play screens, independent of tilt page turn.
+  // acquireAccel() wakes the IMU; releaseAccel() returns it to standby unless
+  // tilt page turn still needs it.
+  bool acquireAccel();
+  void releaseAccel();
+  // Acceleration in g along the IMU axes. False when absent or on I2C error.
+  bool readAccel(float& ax, float& ay, float& az) const;
 };

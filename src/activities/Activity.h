@@ -52,6 +52,11 @@ class Activity {
   virtual bool isHomeActivity() const { return false; }
   virtual bool handleHomeGesture() { return false; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
+  // Dashboards can stay on the panel through deep sleep as a frozen snapshot.
+  // hasSleepSnapshot() is false when there is nothing worth keeping;
+  // renderSleepSnapshot() draws and displays it (render lock held by the caller).
+  virtual bool hasSleepSnapshot() const { return false; }
+  virtual void renderSleepSnapshot() {}
 
   // Start a new activity without destroying the current one
   // Note: requestUpdate() will be invoked automatically once resultHandler finishes
