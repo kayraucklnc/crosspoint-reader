@@ -108,7 +108,9 @@ void PlayMenuActivity::renderItem(const int index, const int x, const int y, con
   const int textX = x + 16 + GLYPH + 20;
   renderer.drawText(UI_12_FONT_ID, textX, y + height / 2 - 30, I18N.get(TITLES[index]), true,
                     focused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-  renderer.drawText(UI_10_FONT_ID, textX, y + height / 2 + 4, I18N.get(DESCRIPTIONS[index]));
+  const int textWidth = x + width - 16 - textX;
+  renderer.drawText(UI_10_FONT_ID, textX, y + height / 2 + 4,
+                    renderer.truncatedText(UI_10_FONT_ID, I18N.get(DESCRIPTIONS[index]), textWidth).c_str());
 }
 
 void PlayMenuActivity::render(RenderLock&&) {
