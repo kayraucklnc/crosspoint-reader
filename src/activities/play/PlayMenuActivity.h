@@ -3,7 +3,7 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-// Play: three small e-ink toys. Up/Down or Left/Right pick one, Confirm opens
+// Play: three small e-ink games. Up/Down or Left/Right pick one, Confirm opens
 // it, Back returns Home. Each toy runs on top of this menu and finishes back to it.
 class PlayMenuActivity final : public Activity {
  public:
