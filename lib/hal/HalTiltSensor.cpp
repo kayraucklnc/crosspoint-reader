@@ -167,3 +167,31 @@ void HalTiltSensor::clearPendingEvents() {
   _hadActivity = false;
   // Intentionally preserve _inTilt so a held tilt doesn't retrigger on next poll
 }
+
+bool HalTiltSensor::acquireAccel() {
+  if (!_available) return false;
+  if (!_accelHeld && !_isAwake && !_sdkImu.wake()) {
+    LOG_ERR("GYR", "IMU wake for accel failed");
+    return false;
+  }
+  _accelHeld = true;
+  return true;
+}
+
+void HalTiltSensor::releaseAccel() {
+  if (!_accelHeld) return;
+  _accelHeld = false;
+  if (!_isAwake && !_sdkImu.sleep()) {
+    LOG_ERR("GYR", "IMU standby after accel failed");
+  }
+}
+
+bool HalTiltSensor::readAccel(float& ax, float& ay, float& az) const {
+  if (!_accelHeld) return false;
+  Imu::Sample sample;
+  if (!_sdkImu.read(sample)) return false;
+  ax = sample.ax;
+  ay = sample.ay;
+  az = sample.az;
+  return true;
+}

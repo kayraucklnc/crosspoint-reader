@@ -5,7 +5,7 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-// Home: a coverflow of recent books above Income, Trains and Settings.
+// Home: a coverflow of recent books above Income, Trains, Play and Settings.
 // Side page buttons flip books, front Left/Right highlight the bottom row,
 // Confirm opens the highlighted item (or the centre book when none is),
 // Back clears the highlight, then resumes the last book.
@@ -22,7 +22,7 @@ class HomeActivity final : public Activity {
   bool isHomeActivity() const override { return true; }
 
  private:
-  static constexpr int ROW_COUNT = 3;  // Income, Trains, Settings
+  static constexpr int ROW_COUNT = 4;  // Income, Trains, Play, Settings
   static constexpr int NO_HIGHLIGHT = -1;
 
   ButtonNavigator buttonNavigator;

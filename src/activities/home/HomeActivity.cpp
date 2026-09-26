@@ -20,6 +20,7 @@
 #include "components/UITheme.h"
 #include "components/CoverTilt.h"
 #include "components/icons/income.h"
+#include "components/icons/play.h"
 #include "components/icons/settings2.h"
 #include "components/icons/trains.h"
 #include "fontIds.h"
@@ -90,7 +91,8 @@ void HomeActivity::onEnter() {
   highlight = recentBooks.empty() ? 0 : NO_HIGHLIGHT;
   if (initialMenuItem == HomeMenuItem::INCOME) highlight = 0;
   if (initialMenuItem == HomeMenuItem::TRAINS) highlight = 1;
-  if (initialMenuItem == HomeMenuItem::SETTINGS_MENU) highlight = 2;
+  if (initialMenuItem == HomeMenuItem::PLAY) highlight = 2;
+  if (initialMenuItem == HomeMenuItem::SETTINGS_MENU) highlight = 3;
   coversPending = !recentBooks.empty();
   requestUpdate();
 }
@@ -157,6 +159,9 @@ void HomeActivity::activate() {
       activityManager.goToTrains();
       return;
     case 2:
+      activityManager.goToPlay();
+      return;
+    case 3:
       activityManager.goToSettings();
       return;
     default:
@@ -410,7 +415,10 @@ int HomeActivity::renderAppRows(const int bottom) const {
 
   renderTile(SIDE, appsTop, tileWidth, TILE_HEIGHT, IncomeIcon, tr(STR_INCOME), highlight == 0);
   renderTile(SIDE + tileWidth + GAP, appsTop, tileWidth, TILE_HEIGHT, TrainsIcon, tr(STR_TRAINS), highlight == 1);
-  renderTile(SIDE, settingsTop, rowWidth, SETTINGS_HEIGHT, Settings2Icon, tr(STR_SETTINGS_TITLE), highlight == 2);
+  // Play shares the lower row with Settings so the carousel keeps its height.
+  renderTile(SIDE, settingsTop, tileWidth, SETTINGS_HEIGHT, PlayIcon, tr(STR_PLAY), highlight == 2);
+  renderTile(SIDE + tileWidth + GAP, settingsTop, tileWidth, SETTINGS_HEIGHT, Settings2Icon, tr(STR_SETTINGS_TITLE),
+             highlight == 3);
   return appsTop;
 }
 

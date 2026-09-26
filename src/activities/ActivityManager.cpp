@@ -20,6 +20,7 @@
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "income/IncomeActivity.h"
+#include "play/PlayMenuActivity.h"
 #include "trains/TrainsActivity.h"
 #include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
@@ -268,6 +269,8 @@ void ActivityManager::goToIncome() { replaceActivity(std::make_unique<IncomeActi
 
 void ActivityManager::goToTrains() { replaceActivity(std::make_unique<TrainsActivity>(renderer, mappedInput)); }
 
+void ActivityManager::goToPlay() { replaceActivity(std::make_unique<PlayMenuActivity>(renderer, mappedInput)); }
+
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToFileBrowser(std::string path) {
@@ -343,6 +346,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::INCOME;
     } else if (activityName == "Trains") {
       initialMenuItem = HomeMenuItem::TRAINS;
+    } else if (activityName == "Play") {
+      initialMenuItem = HomeMenuItem::PLAY;
     }
   }
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh));
