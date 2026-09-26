@@ -8,6 +8,8 @@
 
 #include "BlackjackActivity.h"
 #include "Game2048Activity.h"
+#include "JokersActivity.h"
+#include "JokersArt.h"
 #include "MappedInputManager.h"
 #include "MinesweeperActivity.h"
 #include "PlayMenuGlyphs.h"
@@ -28,6 +30,11 @@ std::unique_ptr<Activity> make(GfxRenderer& renderer, MappedInputManager& mapped
 
 namespace glyphs = play::glyphs;
 
+// Adapts the Jokers icon (no size argument) to the menu's glyph signature.
+void jokersIcon(const GfxRenderer& renderer, const int x, const int y, int /*size*/) {
+  jokers::art::drawMenuIcon(renderer, x, y);
+}
+
 // Menu order, grouped: arcade, puzzles, cards, creative. One row per game.
 constexpr PlayMenuActivity::Entry GAMES[] = {
     {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_SNAKE_DESC, &glyphs::snake, &make<SnakeActivity>},
@@ -36,6 +43,7 @@ constexpr PlayMenuActivity::Entry GAMES[] = {
     {StrId::STR_PLAY_SOKOBAN, StrId::STR_PLAY_SOKOBAN_DESC, &glyphs::sokoban, &make<SokobanActivity>},
     {StrId::STR_PLAY_WORDLE, StrId::STR_PLAY_WORDLE_DESC, &glyphs::wordle, &make<WordleActivity>},
     {StrId::STR_PLAY_BLACKJACK, StrId::STR_PLAY_BLACKJACK_DESC, &glyphs::blackjack, &make<BlackjackActivity>},
+    {StrId::STR_PLAY_JOKERS, StrId::STR_PLAY_JOKERS_DESC, &jokersIcon, &make<JokersActivity>},
     {StrId::STR_PLAY_VOXEL, StrId::STR_PLAY_VOXEL_DESC, &glyphs::voxel, &make<VoxelActivity>},
     {StrId::STR_PLAY_SKETCH, StrId::STR_PLAY_SKETCH_DESC, &glyphs::sketch, &make<SketchActivity>},
 };
