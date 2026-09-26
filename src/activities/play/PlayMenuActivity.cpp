@@ -12,6 +12,7 @@
 #include "SnakeActivity.h"
 #include "SokobanActivity.h"
 #include "SokobanArt.h"
+#include "VoxelActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -45,6 +46,9 @@ void PlayMenuActivity::open() {
       break;
     case 5:
       game = makeUniqueNoThrow<MinesweeperActivity>(renderer, mappedInput);
+      break;
+    case 6:
+      game = makeUniqueNoThrow<VoxelActivity>(renderer, mappedInput);
       break;
     default:
       game = makeUniqueNoThrow<SketchActivity>(renderer, mappedInput);
@@ -122,6 +126,19 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
     case 5:
       MinesweeperActivity::drawMenuIcon(renderer, x, y, size);
       break;
+    case 6: {
+      // An isometric block with a shaded side.
+      const int c = x + size / 2, t = y + 10;
+      const int topX[4] = {c, c + 26, c, c - 26}, topY[4] = {t, t + 13, t + 26, t + 13};
+      renderer.fillPolygon(topX, topY, 4, false);
+      const int rightX[4] = {c, c + 26, c + 26, c}, rightY[4] = {t + 26, t + 13, t + 43, t + 56};
+      renderer.fillPolygon(rightX, rightY, 4, true);
+      for (int i = 0; i < 4; i++) renderer.drawLine(topX[i], topY[i], topX[(i + 1) % 4], topY[(i + 1) % 4], 2, true);
+      renderer.drawLine(c - 26, t + 13, c - 26, t + 43, 2, true);
+      renderer.drawLine(c - 26, t + 43, c, t + 56, 2, true);
+      renderer.drawLine(c, t + 26, c, t + 56, 2, true);
+      break;
+    }
     default: {
       // A quick pencil face.
       const int c = size / 2;
@@ -140,11 +157,11 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
 void PlayMenuActivity::renderItem(const int index, const int x, const int y, const int width, const int height) const {
   static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_BLACKJACK, StrId::STR_PLAY_SKETCH,
                                                StrId::STR_PLAY_SOKOBAN, StrId::STR_PLAY_2048,
-                                               StrId::STR_PLAY_MINES};
+                                               StrId::STR_PLAY_MINES, StrId::STR_PLAY_VOXEL};
   static constexpr StrId DESCRIPTIONS[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE_DESC, StrId::STR_PLAY_BLACKJACK_DESC,
                                                      StrId::STR_PLAY_SKETCH_DESC, StrId::STR_PLAY_SOKOBAN_DESC,
                                                      StrId::STR_PLAY_2048_DESC,
-                                                     StrId::STR_PLAY_MINES_DESC};
+                                                     StrId::STR_PLAY_MINES_DESC, StrId::STR_PLAY_VOXEL_DESC};
   const bool focused = index == selected;
   renderer.drawRoundedRect(x, y, width, height, focused ? FOCUS_FRAME : 1, 10, true);
   const int glyphY = y + (height - GLYPH) / 2;
