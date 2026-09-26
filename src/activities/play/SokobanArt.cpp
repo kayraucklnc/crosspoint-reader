@@ -69,6 +69,41 @@ void drawCrate(const GfxRenderer& r, const int x, const int y, const int s, cons
   r.drawLine(bx + in0, by + in1, bx + in1, by + in0, brace, true);
 }
 
+// Bold arrow for a push, drawn inside a crate of side `bs` at (bx, by).
+void drawArrow(const GfxRenderer& r, const int bx, const int by, const int bs, const int dir, const bool black) {
+  // Arrow pointing up in thousandths of the crate, rotated to `dir`.
+  static constexpr int16_t SHAPE[7][2] = {{0, -330}, {300, 0}, {110, 0}, {110, 330}, {-110, 330}, {-110, 0}, {-300, 0}};
+  int xs[7], ys[7];
+  const int cx = bx + bs / 2, cy = by + bs / 2;
+  for (int i = 0; i < 7; i++) {
+    int ax = SHAPE[i][0], ay = SHAPE[i][1];
+    for (int t = 0; t < dir; t++) {  // quarter turns clockwise
+      const int nx = -ay;
+      ay = ax;
+      ax = nx;
+    }
+    xs[i] = cx + ax * bs / 1000;
+    ys[i] = cy + ay * bs / 1000;
+  }
+  r.fillPolygon(xs, ys, 7, black);
+}
+
+void drawHintCrate(const GfxRenderer& r, const int x, const int y, const int s, const bool onGoal, const int dir) {
+  const int inset = std::max(1, s / 10);
+  const int bx = x + inset, by = y + inset, bs = s - 2 * inset;
+  const int frame = std::max(2, s / 9);
+  r.fillRect(bx, by, bs, bs, onGoal);
+  if (!onGoal) r.drawRect(bx, by, bs, bs, frame, true);
+  drawArrow(r, bx, by, bs, dir, !onGoal);
+  // Dotted halo in the tile margin marks the crate to move.
+  for (int i = 0; i < s; i += 3) {
+    r.drawPixel(x + i, y, true);
+    r.drawPixel(x + i, y + s - 1, true);
+    r.drawPixel(x, y + i, true);
+    r.drawPixel(x + s - 1, y + i, true);
+  }
+}
+
 void drawPlayer(const GfxRenderer& r, const int cx, const int cy, const int s, const int facing, const bool onGoal) {
   const int radius = std::max(3, s * 36 / 100);
   if (onGoal) {
@@ -98,13 +133,28 @@ void drawTile(const GfxRenderer& renderer, const int x, const int y, const int s
   renderer.drawPixel(x, y, true);
   const int cx = x + size / 2, cy = y + size / 2;
   const bool goal = visual & CELL_GOAL;
-  if (visual & CELL_BOX) {
+  const bool hinted = visual & TILE_HINT;
+  if ((visual & CELL_BOX) && hinted) {
+    drawHintCrate(renderer, x, y, size, goal, (visual >> FACING_SHIFT) & 3);
+  } else if (visual & CELL_BOX) {
     drawCrate(renderer, x, y, size, goal);
   } else if (visual & CELL_PLAYER) {
     drawPlayer(renderer, cx, cy, size, (visual >> FACING_SHIFT) & 3, goal);
   } else if (goal) {
     drawGoal(renderer, cx, cy, size);
+    if (hinted) disc(renderer, cx, cy, std::max(2, size / 8), Color::Black);
+  } else if (hinted) {
+    disc(renderer, cx, cy, std::max(2, size / 10), Color::Black);
   }
+}
+
+void drawBulb(const GfxRenderer& renderer, const int cx, const int cy, const int size, const bool black) {
+  const int r = size * 3 / 10;
+  const int top = cy - size / 2;
+  renderer.drawRoundedRect(cx - r, top, 2 * r, 2 * r, 2, r, black);
+  const int neck = std::max(2, r / 2);
+  renderer.fillRect(cx - neck, top + 2 * r - 1, 2 * neck, 2, black);
+  renderer.fillRect(cx - neck + 1, top + 2 * r + 3, 2 * neck - 2, 2, black);
 }
 
 void drawStar(const GfxRenderer& renderer, const int cx, const int cy, const int radius, const bool filled) {
