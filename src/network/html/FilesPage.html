@@ -86,6 +86,8 @@
       color: var(--title-color);
       font-weight: 600;
     }
+    .embed body { max-width: none; padding: 12px; background: transparent; }
+    .embed body > h1, .embed .nav-links { display: none; }
     .nav-links {
       margin: 20px 0;
       display: flex;
@@ -1501,6 +1503,10 @@
   </style>
 </head>
 <body>
+<script>
+  // Inside the web app (/#files) the app supplies the chrome; drop this page's own header and nav.
+  if (new URLSearchParams(location.search).get('embed')) document.documentElement.classList.add('embed');
+</script>
 <h1>📚 CrossPoint Reader</h1>
 
 <div class="nav-links">
@@ -1558,6 +1564,7 @@
     <h3>📤 Upload file</h3>
     <div class="upload-form">
       <p class="file-info">Select a file to upload to <strong id="uploadPathDisplay"></strong></p>
+      <p class="file-info" id="wallpaperNote" hidden>Images are converted for wallpaper: cropped to the screen, grayscale BMP.</p>
       <div class="drop-zone" id="dropZone">
         <input type="file" id="fileInput" onchange="validateFile()" multiple>
         <p class="drop-zone-hint">⬇ Drop files here — or click to browse</p>
@@ -2126,6 +2133,7 @@
     if (logContainer) logContainer.innerHTML = '';
 
     document.getElementById('uploadPathDisplay').textContent = currentPath === '/' ? '/ 🏠' : currentPath;
+    document.getElementById('wallpaperNote').hidden = !isWallpaperDir();
     document.getElementById('uploadModal').classList.add('open');
   }
 
@@ -5619,6 +5627,40 @@ function uploadFileHTTP(file, onProgress, onComplete, onError) {
   });
 }
 
+// Wallpapers (/sleep, /.sleep): decode in the browser, cover-crop to the portrait
+// screen, and write an 8-bit grayscale BMP the firmware draws without resampling.
+const isWallpaperDir = () => ['/sleep', '/.sleep'].includes(currentPath.replace(/\/$/, ''));
+const WALLPAPER_IMAGE = /\.(png|jpe?g|webp|gif|heic|heif|bmp)$/i;
+
+function grayBmp(rgba, w, h) {
+  const row = (w + 3) & ~3, off = 1078, b = new Uint8Array(off + row * h), v = new DataView(b.buffer);
+  b[0] = 66; b[1] = 77;
+  [[2, b.length], [10, off], [14, 40], [18, w], [22, h], [34, row * h], [46, 256], [50, 256]]
+    .forEach(([at, val]) => v.setUint32(at, val, true));
+  v.setUint16(26, 1, true); v.setUint16(28, 8, true);
+  for (let i = 0; i < 256; i++) b.fill(i, 54 + i * 4, 57 + i * 4);
+  for (let y = 0; y < h; y++) {
+    const dst = off + (h - 1 - y) * row;  // bottom-up rows
+    for (let x = 0, p = y * w * 4; x < w; x++, p += 4) b[dst + x] = (rgba[p] * 77 + rgba[p + 1] * 150 + rgba[p + 2] * 29) >> 8;
+  }
+  return b;
+}
+
+async function toWallpaper(file) {
+  const [w, h] = DETECTED_DEVICE === 'X4' ? [480, 800] : [528, 792];
+  const img = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  if (/\.bmp$/i.test(file.name) && img.width === w && img.height === h) { img.close(); return file; }
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);  // transparent pixels read as paper
+  const s = Math.max(w / img.width, h / img.height);
+  g.drawImage(img, (w - img.width * s) / 2, (h - img.height * s) / 2, img.width * s, img.height * s);
+  img.close();
+  const bmp = grayBmp(g.getImageData(0, 0, w, h).data, w, h);
+  return new File([bmp], file.name.replace(/\.[^.]*$/, '') + '.bmp', { type: 'image/bmp' });
+}
+
 async function uploadFile() {
   if (isUploadInProgress) return;
 
@@ -5739,6 +5781,15 @@ async function uploadFile() {
       file = await maybeRenameEbookFile(file);
       if (file.name !== originalName) {
         console.log(`[Upload] Renamed from metadata: ${originalName} -> ${file.name}`);
+      }
+    }
+
+    if (isWallpaperDir() && WALLPAPER_IMAGE.test(file.name)) {
+      progressText.textContent = `Converting ${file.name} for wallpaper...`;
+      try {
+        file = await toWallpaper(file);
+      } catch (e) {
+        console.warn(`[Upload] Browser can't decode ${file.name}; uploading as is`, e);
       }
     }
 

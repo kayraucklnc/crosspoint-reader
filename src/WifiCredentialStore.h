@@ -63,6 +63,12 @@ class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
   std::string getLastConnectedSsid() const;
   void clearLastConnectedSsid();
 
+  // Reorders saved networks (priority for background joins); unknown SSIDs are
+  // ignored and unlisted ones keep their relative order at the end.
+  bool setOrder(const std::vector<std::string>& ssids);
+  // Priority index of a saved SSID, or -1.
+  int priorityOf(const std::string& ssid) const;
+
   // Clear all credentials
   void clearAll();
 };

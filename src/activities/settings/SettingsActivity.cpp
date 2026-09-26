@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "AboutActivity.h"
+#include "WallpaperPickerActivity.h"
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
@@ -25,6 +26,7 @@
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
 #include "OpdsServerListActivity.h"
+#include "OpdsServerStore.h"
 #include "OtaUpdateActivity.h"
 #include "SdCardFontSystem.h"
 #include "SdFirmwareUpdateActivity.h"
@@ -32,6 +34,7 @@
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "TextSettingsActivity.h"
+#include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
@@ -44,11 +47,19 @@ namespace fui = freeink::ui;
 SettingsActivity::SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : UiTabListActivity("Settings", renderer, mappedInput) {}
 
+namespace {
+bool wallpaperSleepScreen() {
+  return SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM ||
+         SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM;
+}
+}  // namespace
+
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   readerSettings.clear();
   controlsSettings.clear();
   systemSettings.clear();
+  advancedSettings.clear();
 
   // Pick up any fonts uploaded/deleted over the web server since the last
   // reader activity ran — otherwise the font-family picker shows stale list.
@@ -68,6 +79,8 @@ void SettingsActivity::rebuildSettingsLists() {
           (BoardConfig::isX4Pro() || BoardConfig::isX4Classic())) {
         continue;
       }
+      // Wallpapers only apply to the Custom sleep screens.
+      if (setting.valuePtr == &CrossPointSettings::wallpaperMode && !wallpaperSleepScreen()) continue;
       displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into "Text Settings"
@@ -111,6 +124,21 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_ABOUT, SettingAction::About));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
+  // Picking a file only makes sense in Fixed mode; it sits right under the mode.
+  if (wallpaperSleepScreen() && SETTINGS.wallpaperMode == CrossPointSettings::WALLPAPER_FIXED) {
+    const auto it = std::find_if(displaySettings.begin(), displaySettings.end(), [](const SettingInfo& setting) {
+      return setting.valuePtr == &CrossPointSettings::wallpaperMode;
+    });
+    displaySettings.insert(it == displaySettings.end() ? displaySettings.end() : it + 1,
+                           SettingInfo::Action(StrId::STR_WALLPAPER_CHOOSE, SettingAction::ChooseWallpaper));
+  }
+  // Home only shows the reading carousel, Income and Settings; the rest lives here.
+  advancedSettings.push_back(SettingInfo::Action(StrId::STR_BROWSE_FILES, SettingAction::BrowseFiles));
+  advancedSettings.push_back(SettingInfo::Action(StrId::STR_LIBRARY, SettingAction::Library));
+  advancedSettings.push_back(SettingInfo::Action(StrId::STR_FILE_TRANSFER, SettingAction::FileTransfer));
+  if (OPDS_STORE.hasServers()) {
+    advancedSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_BROWSER, SettingAction::OpdsCatalog));
+  }
   readerSettings.insert(readerSettings.begin(),
                         SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
   readerSettings.insert(readerSettings.begin() + 1,
@@ -130,6 +158,9 @@ void SettingsActivity::rebuildSettingsLists() {
       break;
     case 3:
       currentSettings = &systemSettings;
+      break;
+    case 4:
+      currentSettings = &advancedSettings;
       break;
   }
   settingsCount = static_cast<int>(currentSettings->size());
@@ -164,6 +195,9 @@ void SettingsActivity::selectCategory(const int categoryIndex) {
       break;
     case 3:
       currentSettings = &systemSettings;
+      break;
+    case 4:
+      currentSettings = &advancedSettings;
       break;
   }
   settingsCount = static_cast<int>(currentSettings->size());
@@ -441,6 +475,25 @@ void SettingsActivity::toggleCurrentSetting() {
         } else {
           LOG_ERR("SETTINGS", "OOM: AboutActivity");
         }
+        break;
+      case SettingAction::ChooseWallpaper:
+        if (auto activity = makeUniqueNoThrow<WallpaperPickerActivity>(renderer, mappedInput)) {
+          startActivityForResult(std::move(activity), resultHandler);
+        } else {
+          LOG_ERR("SETTINGS", "OOM: WallpaperPickerActivity");
+        }
+        break;
+      case SettingAction::BrowseFiles:
+        activityManager.goToFileBrowser();
+        break;
+      case SettingAction::Library:
+        activityManager.goToLibrary();
+        break;
+      case SettingAction::FileTransfer:
+        activityManager.goToFileTransfer();
+        break;
+      case SettingAction::OpdsCatalog:
+        activityManager.goToBrowser();
         break;
       case SettingAction::None:
         // Do nothing

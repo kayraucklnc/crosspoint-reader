@@ -19,6 +19,8 @@
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
+#include "income/IncomeActivity.h"
+#include "trains/TrainsActivity.h"
 #include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "network/UsbDriveActivity.h"
@@ -262,6 +264,10 @@ void ActivityManager::goToUsbDrive() {
 #endif
 }
 
+void ActivityManager::goToIncome() { replaceActivity(std::make_unique<IncomeActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToTrains() { replaceActivity(std::make_unique<TrainsActivity>(renderer, mappedInput)); }
+
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToFileBrowser(std::string path) {
@@ -333,6 +339,10 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
     } else if (activityName == "Settings") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
+    } else if (activityName == "Income") {
+      initialMenuItem = HomeMenuItem::INCOME;
+    } else if (activityName == "Trains") {
+      initialMenuItem = HomeMenuItem::TRAINS;
     }
   }
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh));

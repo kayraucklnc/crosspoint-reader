@@ -171,6 +171,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
 
   // Hide battery percentage
+  enum WALLPAPER_MODE { WALLPAPER_RANDOM = 0, WALLPAPER_CYCLE = 1, WALLPAPER_FIXED = 2 };
   enum HIDE_BATTERY_PERCENTAGE { HIDE_NEVER = 0, HIDE_READER = 1, HIDE_ALWAYS = 2, HIDE_BATTERY_PERCENTAGE_COUNT };
 
   // Page turn button long press behavior
@@ -243,6 +244,18 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t clockUtcOffsetQ = 48;
   // Clock display format: 0 = 24-hour, 1 = 12-hour
   uint8_t clockFormat = 0;
+  // Income dashboard layout: 0 = horizontal (landscape), 1 = vertical (portrait)
+  uint8_t incomeLayout = 0;
+  // Income amount: 0 = gross charges, 1 = net balance transactions
+  uint8_t incomeAmount = 0;
+  // Income day boundaries: 0 = device timezone, 1 = UTC (matches Stripe's dashboard)
+  uint8_t incomeDayUtc = 0;
+  // Which /sleep wallpaper to show: WALLPAPER_MODE
+  uint8_t wallpaperMode = WALLPAPER_RANDOM;
+  // Image quantization for covers and wallpapers: 0 = ordered (Bayer), 1 = error diffusion
+  uint8_t imageDithering = 0;
+  // One intermediate frame when flipping books on the home screen
+  uint8_t homeAnimation = 1;
   // Index into the timezone table (src/util/Timezones.cpp, append-only).
   // 255 = never chosen; falls back to the legacy UTC offset, then UTC.
   uint8_t clockTimezone = 255;

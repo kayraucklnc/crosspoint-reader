@@ -38,6 +38,11 @@ struct Sink {
   std::function<bool(const uint8_t*, size_t)> write;  // returns false to abort the transfer
   HttpDownloader::ProgressCallback progress;
   bool* cancelFlag = nullptr;
+  const char* authorization = nullptr;  // full Authorization header value, e.g. "Bearer ..."
+  int status = 0;                       // final HTTP status, 0 if no response
+  const char* const* extraHeaders = nullptr;  // name, value pairs
+  std::string* dateHeader = nullptr;          // receives the response Date header when set
+  int extraHeaderCount = 0;
   size_t total = 0;
   size_t downloaded = 0;
 };
@@ -86,6 +91,10 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
       const String encoded = base64::encode(credentials.c_str());
       http.addHeader("Authorization", std::string("Basic ") + encoded.c_str());
     }
+    if (sink.authorization) http.addHeader("Authorization", sink.authorization);
+    for (int h = 0; h < sink.extraHeaderCount; h++) {
+      http.addHeader(sink.extraHeaders[h * 2], sink.extraHeaders[h * 2 + 1]);
+    }
 
     LOG_DBG("HTTP", "wolfSSL GET: %s", url.c_str());
     const int status = http.GET(
@@ -99,6 +108,8 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
         },
         [&sink]() { return sink.cancelFlag && *sink.cancelFlag; });
 
+    sink.status = status;
+    if (sink.dateHeader) *sink.dateHeader = http.getHeader("date");
     if (http.aborted()) return HttpDownloader::ABORTED;
     if (status < 0) {
       LOG_ERR("HTTP", "wolfSSL request failed: %s", url.c_str());
@@ -171,6 +182,10 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     const String header = "Basic " + base64::encode(credentials.c_str());
     esp_http_client_set_header(client, "Authorization", header.c_str());
   }
+  if (sink.authorization) esp_http_client_set_header(client, "Authorization", sink.authorization);
+  for (int h = 0; h < sink.extraHeaderCount; h++) {
+    esp_http_client_set_header(client, sink.extraHeaders[h * 2], sink.extraHeaders[h * 2 + 1]);
+  }
 
   // open()/read() does not auto-follow redirects (only perform() does), so step
   // 30x responses manually. OPDS download endpoints and the GitHub release CDN
@@ -196,6 +211,7 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     status = esp_http_client_get_status_code(client);
   }
 
+  sink.status = status;
   if (status != 200) {
     LOG_ERR("HTTP", "unexpected status: %d", status);
     esp_http_client_cleanup(client);
@@ -287,6 +303,38 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
   Sink sink;
   sink.write = onData;
   return runGetSecure(url, username, password, sink) == OK;
+}
+
+bool HttpDownloader::fetchUrlWithAuthorization(const std::string& url, const DataCallback& onData,
+                                               const std::string& authorization, int* statusOut) {
+  LOG_DBG("HTTP", "Fetching with auth header: %s", url.c_str());
+  Sink sink;
+  sink.write = onData;
+  sink.authorization = authorization.c_str();
+  const bool ok = runGetSecure(url, "", "", sink) == OK;
+  if (statusOut) *statusOut = sink.status;
+  return ok;
+}
+
+bool HttpDownloader::fetchUrlWithHeaders(const std::string& url, const DataCallback& onData,
+                                         const char* const* headers, const int headerCount, int* statusOut) {
+  LOG_DBG("HTTP", "Fetching with headers: %s", url.c_str());
+  Sink sink;
+  sink.write = onData;
+  sink.extraHeaders = headers;
+  sink.extraHeaderCount = headerCount;
+  const bool ok = runGetSecure(url, "", "", sink) == OK;
+  if (statusOut) *statusOut = sink.status;
+  return ok;
+}
+
+bool HttpDownloader::fetchDateHeader(const std::string& url, std::string& outDate) {
+  Sink sink;
+  sink.write = [](const uint8_t*, size_t) { return false; };  // headers are all we need
+  sink.dateHeader = &outDate;
+  outDate.clear();
+  runGetSecure(url, "", "", sink);
+  return !outDate.empty();
 }
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,

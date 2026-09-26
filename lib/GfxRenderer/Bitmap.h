@@ -1,5 +1,7 @@
 #pragma once
 
+#include "OrderedDither.h"
+
 #include <HalStorage.h>
 
 #include <cstdint>
@@ -103,4 +105,9 @@ class Bitmap {
 
   mutable AtkinsonDitherer* atkinsonDitherer = nullptr;
   mutable FloydSteinbergDitherer* fsDitherer = nullptr;
+  // Ordered (Bayer) mode: auto-levels + tone curve computed from a histogram pre-pass.
+  ordered_dither::Tone* tone = nullptr;
+
+  BmpReaderError buildTone();
+  uint8_t rowLuminance(const uint8_t* rowBuffer, int x) const;
 };

@@ -1,5 +1,15 @@
 #include "PngToBmpConverter.h"
 
+#include <OrderedDither.h>
+
+namespace {
+// Fixed tone curve for streamed decodes (no histogram pass).
+const ordered_dither::Tone& pngTone() {
+  static const ordered_dither::Tone tone;
+  return tone;
+}
+}  // namespace
+
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <InflateStream.h>
@@ -693,7 +703,9 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
       } else if (oneBit) {
         for (int x = 0; x < outWidth; x++) {
           const uint8_t bit =
-              atkinson1BitDitherer ? atkinson1BitDitherer->processPixel(grayRow[x], x) : quantize1bit(grayRow[x], x, y);
+              ordered_dither::bayer()  ? ordered_dither::level2(pngTone()(grayRow[x]), x, y)
+              : atkinson1BitDitherer ? atkinson1BitDitherer->processPixel(grayRow[x], x)
+                                     : quantize1bit(grayRow[x], x, y);
           const int byteIndex = x / 8;
           const int bitOffset = 7 - (x % 8);
           rowBuffer[byteIndex] |= (bit << bitOffset);
@@ -703,7 +715,9 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
         for (int x = 0; x < outWidth; x++) {
           const uint8_t gray = adjustPixel(grayRow[x]);
           uint8_t twoBit;
-          if (atkinsonDitherer) {
+          if (ordered_dither::bayer()) {
+            twoBit = ordered_dither::level4(pngTone()(grayRow[x]), x, y);
+          } else if (atkinsonDitherer) {
             twoBit = atkinsonDitherer->processPixel(gray, x);
           } else if (fsDitherer) {
             twoBit = fsDitherer->processPixel(gray, x);
@@ -760,7 +774,9 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
           for (int x = 0; x < outWidth; x++) {
             const uint8_t gray = (rowCount[x] > 0) ? (rowAccum[x] / rowCount[x]) : 0;
             const uint8_t bit =
-                atkinson1BitDitherer ? atkinson1BitDitherer->processPixel(gray, x) : quantize1bit(gray, x, currentOutY);
+                ordered_dither::bayer()  ? ordered_dither::level2(pngTone()(gray), x, currentOutY)
+                : atkinson1BitDitherer ? atkinson1BitDitherer->processPixel(gray, x)
+                                       : quantize1bit(gray, x, currentOutY);
             const int byteIndex = x / 8;
             const int bitOffset = 7 - (x % 8);
             rowBuffer[byteIndex] |= (bit << bitOffset);
@@ -768,9 +784,12 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
           if (atkinson1BitDitherer) atkinson1BitDitherer->nextRow();
         } else {
           for (int x = 0; x < outWidth; x++) {
-            const uint8_t gray = adjustPixel((rowCount[x] > 0) ? (rowAccum[x] / rowCount[x]) : 0);
+            const uint8_t raw = (rowCount[x] > 0) ? (rowAccum[x] / rowCount[x]) : 0;
+            const uint8_t gray = adjustPixel(raw);
             uint8_t twoBit;
-            if (atkinsonDitherer) {
+            if (ordered_dither::bayer()) {
+              twoBit = ordered_dither::level4(pngTone()(raw), x, currentOutY);
+            } else if (atkinsonDitherer) {
               twoBit = atkinsonDitherer->processPixel(gray, x);
             } else if (fsDitherer) {
               twoBit = fsDitherer->processPixel(gray, x);

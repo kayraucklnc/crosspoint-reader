@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16171a" media="(prefers-color-scheme: dark)">
+<title>CrossPoint</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #fff; --panel-2: #efeee9; --text: #1d1d1f; --muted: #6e6e73; --line: #e3e1db;
+  --accent: #2f5bd3; --accent-ink: #fff; --ok: #1f8a4c; --bad: #c9362b; --warn: #b7791f;
+  --radius: 14px; --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #16171a; --panel: #1f2024; --panel-2: #2a2b30; --text: #f2f2f4; --muted: #9a9aa2; --line: #313238;
+    --accent: #7c9cff; --accent-ink: #0d1020; --ok: #4cc47f; --bad: #ff6b5e; --warn: #f0b44c; --shadow: none; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); }
+h1 { font-size: 26px; margin: 4px 0 18px; letter-spacing: -.02em; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+.app { display: flex; min-height: 100%; }
+nav { width: 220px; flex: none; padding: 22px 12px; border-right: 1px solid var(--line); position: sticky; top: 0; height: 100vh; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; padding: 0 10px 18px; }
+.brand i { width: 28px; height: 28px; border-radius: 8px; background: var(--text); display: inline-block; position: relative; }
+.brand i::after { content: ""; position: absolute; inset: 7px 9px; border: 2px solid var(--bg); border-radius: 2px; }
+nav a { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 500; }
+nav a:hover { background: var(--panel-2); }
+nav a.on { background: var(--panel); box-shadow: var(--shadow); color: var(--accent); }
+nav svg { width: 20px; height: 20px; flex: none; }
+main { flex: 1; min-width: 0; padding: 28px clamp(16px, 4vw, 44px) 110px; max-width: 980px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow); }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.stat b { display: block; font-size: 22px; letter-spacing: -.02em; margin-top: 2px; }
+.stat span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
+.row:first-of-type { border-top: 0; }
+.row .name { font-weight: 500; }
+.row .hint { color: var(--muted); font-size: 13px; }
+.muted { color: var(--muted); }
+button, .btn { font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); padding: 9px 14px; border-radius: 10px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+button.primary, .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.danger { color: var(--bad); }
+button.icon { padding: 7px 10px; }
+button:disabled { opacity: .45; cursor: default; }
+input, select { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; min-width: 0; }
+input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+select { max-width: 60vw; }
+.seg { display: inline-flex; background: var(--panel-2); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: none; padding: 7px 12px; border-radius: 8px; font-weight: 500; }
+.seg button.on { background: var(--panel); box-shadow: var(--shadow); color: var(--accent); font-weight: 600; }
+.switch { position: relative; width: 46px; height: 28px; flex: none; }
+.switch input { opacity: 0; width: 100%; height: 100%; margin: 0; position: absolute; cursor: pointer; }
+.switch span { position: absolute; inset: 0; background: var(--line); border-radius: 99px; transition: .2s; pointer-events: none; }
+.switch span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 22px; height: 22px; background: #fff; border-radius: 50%; transition: .2s; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(18px); }
+.pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 12px; font-weight: 600; background: var(--panel-2); }
+.pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); }
+.toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%) translateY(20px); opacity: 0; background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-weight: 600; transition: .25s; pointer-events: none; z-index: 20; max-width: 90vw; }
+.toast.show { opacity: 1; transform: translateX(-50%); }
+.toast.bad { background: var(--bad); color: #fff; }
+.walls { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.wall { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; position: relative; }
+.wall canvas, .wall .ph { display: block; width: 100%; aspect-ratio: 2/3; background: var(--panel-2); }
+.wall.on { outline: 3px solid var(--accent); }
+.wall div { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 6px 6px 6px 10px; font-size: 12px; }
+.wall div span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drop { border: 2px dashed var(--line); border-radius: var(--radius); padding: 22px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop.over { border-color: var(--accent); color: var(--accent); }
+.list-item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.list-item:first-child { border-top: 0; }
+.list-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+iframe { width: 100%; height: calc(100vh - 120px); border: 0; background: transparent; color-scheme: normal; }
+.search { width: 100%; margin-bottom: 14px; padding: 12px 14px; }
+.savebar { position: sticky; bottom: 84px; display: none; justify-content: flex-end; gap: 8px; padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 30px rgba(0,0,0,.12); }
+.savebar.show { display: flex; }
+.cols { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+@media (max-width: 760px) {
+  nav { position: fixed; bottom: 0; top: auto; left: 0; right: 0; width: auto; height: auto; padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); border-right: 0; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); display: flex; justify-content: space-around; z-index: 10; }
+  .brand { display: none; }
+  nav a { flex-direction: column; gap: 2px; padding: 6px 0; font-size: 10px; flex: 1 1 0; min-width: 0; justify-content: center; text-align: center; }
+  nav a span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row { flex-wrap: wrap; }
+  .row > :last-child { margin-left: auto; }
+  body { overflow-x: hidden; }
+  nav a.on { background: none; box-shadow: none; }
+  main { padding-top: 18px; }
+  .cols { grid-template-columns: 1fr; }
+  .savebar { bottom: 78px; }
+  iframe { height: calc(100vh - 160px); }
+}
+</style>
+</head>
+<body>
+<div class="app">
+<nav id="nav">
+  <div class="brand"><i></i>CrossPoint</div>
+</nav>
+<main id="main"></main>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const ICONS = {
+  home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z',
+  files: 'M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+  walls: 'M4 4h16v16H4zM4 16l5-5 4 4 3-3 4 4M15 9a1 1 0 1 0 0-.01',
+  income: 'M4 19V5M4 19h16M7 15l4-4 3 3 5-6',
+  trains: 'M7 3h10a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3zM4 11h16M8 18l-2 3M16 18l2 3M8 14.5h.01M16 14.5h.01',
+  wifi: 'M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01',
+  settings: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M16 4v4M10 10v4M18 16v4'
+};
+const TABS = [['home', 'Home'], ['files', 'Files'], ['walls', 'Wallpapers'], ['income', 'Income'],
+  ['trains', 'Trains'], ['wifi', 'Wi-Fi'], ['settings', 'Settings']];
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[k]}"/></svg>`;
+
+function toast(msg, bad) {
+  const t = $('#toast');
+  t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : '');
+  clearTimeout(t._t); t._t = setTimeout(() => t.className = 'toast', 2600);
+}
+async function api(path, body) {
+  const opt = body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)};
+  const r = await fetch(path, opt);
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch { data = text; }
+  if (!r.ok) throw new Error((data && data.error) || text || r.statusText);
+  return data;
+}
+const fail = e => toast(e.message || String(e), true);
+const seg = (id, opts, cur) => `<div class="seg" id="${id}">${opts.map((o, i) => `<button data-v="${i}" class="${i === cur ? 'on' : ''}">${esc(o)}</button>`).join('')}</div>`;
+function onSeg(id, fn) {
+  $('#' + id).onclick = e => { const b = e.target.closest('button'); if (!b) return;
+    [...b.parentNode.children].forEach(x => x.classList.toggle('on', x === b)); fn(+b.dataset.v); };
+}
+const saveSetting = (key, value) => api('/api/settings', {[key]: value}).then(() => toast('Saved'), fail);
+
+// ---------- Home ----------
+async function viewHome(m) {
+  m.innerHTML = `<h1>Hello</h1><div class="grid" id="stats"><div class="stat"><span>Loading</span><b>…</b></div></div>
+    <div class="card" style="margin-top:16px"><h2>Quick actions</h2><div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a class="btn primary" href="#files">Upload books</a><a class="btn" href="#walls">Wallpapers</a>
+    <a class="btn" href="#income">Stripe key</a><a class="btn" href="/fonts">Fonts</a></div></div>`;
+  try {
+    const [s, d] = await Promise.all([api('/api/status'), api('/api/device').catch(() => ({}))]);
+    const up = s.uptime, fmtUp = up > 3600 ? `${Math.floor(up / 3600)}h ${Math.floor(up % 3600 / 60)}m` : `${Math.floor(up / 60)}m`;
+    const stats = [['Battery', d.battery != null ? d.battery + '%' : '—'], ['Device', s.device || '—'], ['Firmware', s.version],
+      ['Free memory', Math.round(s.freeHeap / 1024) + ' KB'], ['Network', s.mode === 'AP' ? 'Hotspot' : (s.rssi + ' dBm')],
+      ['IP address', s.ip], ['Uptime', fmtUp], ['Serial', s.serial || '—']];
+    $('#stats').innerHTML = stats.map(([k, v]) => `<div class="stat"><span>${k}</span><b>${esc(v)}</b></div>`).join('');
+  } catch (e) { fail(e); }
+}
+
+// ---------- Files (full file manager, embedded) ----------
+function viewFiles(m) {
+  m.innerHTML = `<h1>Files</h1><iframe src="/files?embed=1" title="File manager"></iframe>`;
+}
+
+// ---------- Wallpapers ----------
+function grayBmp(rgba, w, h) {
+  const row = (w + 3) & ~3, off = 1078, b = new Uint8Array(off + row * h), v = new DataView(b.buffer);
+  b[0] = 66; b[1] = 77;
+  [[2, b.length], [10, off], [14, 40], [18, w], [22, h], [34, row * h], [46, 256], [50, 256]].forEach(([a, x]) => v.setUint32(a, x, true));
+  v.setUint16(26, 1, true); v.setUint16(28, 8, true);
+  for (let i = 0; i < 256; i++) b.fill(i, 54 + i * 4, 57 + i * 4);
+  for (let y = 0; y < h; y++) {
+    const d = off + (h - 1 - y) * row;
+    for (let x = 0, p = y * w * 4; x < w; x++, p += 4) b[d + x] = (rgba[p] * 77 + rgba[p + 1] * 150 + rgba[p + 2] * 29) >> 8;
+  }
+  return b;
+}
+async function toWallpaper(file, device) {
+  const [w, h] = device === 'X4' ? [480, 800] : [528, 792];
+  const img = await createImageBitmap(file, {imageOrientation: 'from-image'});
+  if (/\.bmp$/i.test(file.name) && img.width === w && img.height === h) { img.close(); return file; }
+  const c = Object.assign(document.createElement('canvas'), {width: w, height: h}), g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
+  const s = Math.max(w / img.width, h / img.height);
+  g.drawImage(img, (w - img.width * s) / 2, (h - img.height * s) / 2, img.width * s, img.height * s);
+  img.close();
+  return new File([grayBmp(g.getImageData(0, 0, w, h).data, w, h)], file.name.replace(/\.[^.]*$/, '') + '.bmp');
+}
+// Small preview from a BMP (1/4/8/24/32-bit, uncompressed), sampled straight into a thumbnail canvas.
+function bmpThumb(buf, canvas) {
+  const v = new DataView(buf), off = v.getUint32(10, true), w = v.getInt32(18, true), hRaw = v.getInt32(22, true);
+  const h = Math.abs(hRaw), bpp = v.getUint16(28, true), row = ((w * bpp + 31) >> 5) << 2, pal = 14 + v.getUint32(14, true);
+  const tw = canvas.width = 120, th = canvas.height = 180, g = canvas.getContext('2d'), out = g.createImageData(tw, th);
+  const s = Math.max(tw / w, th / h), ox = (w - tw / s) / 2, oy = (h - th / s) / 2;
+  for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) {
+    const sx = Math.min(w - 1, (ox + x / s) | 0), sy = Math.min(h - 1, (oy + y / s) | 0);
+    const r0 = off + (hRaw > 0 ? h - 1 - sy : sy) * row; let gray;
+    if (bpp >= 24) { const p = r0 + sx * (bpp / 8); gray = (v.getUint8(p) * 29 + v.getUint8(p + 1) * 150 + v.getUint8(p + 2) * 77) >> 8; }
+    else { const bit = sx * bpp, idx = (v.getUint8(r0 + (bit >> 3)) >> (8 - bpp - (bit & 7))) & ((1 << bpp) - 1), p = pal + idx * 4;
+      gray = (v.getUint8(p) * 29 + v.getUint8(p + 1) * 150 + v.getUint8(p + 2) * 77) >> 8; }
+    const o = (y * tw + x) * 4; out.data[o] = out.data[o + 1] = out.data[o + 2] = gray; out.data[o + 3] = 255;
+  }
+  g.putImageData(out, 0, 0);
+}
+async function viewWalls(m) {
+  m.innerHTML = `<h1>Wallpapers</h1><div class="card"><div class="row"><div><div class="name">Sleep screen wallpaper</div>
+    <div class="hint">Shown when the device sleeps (Sleep Screen: Custom)</div></div><div id="modeSeg"></div></div></div>
+    <div class="drop card" id="drop">Drop images here or <u>choose files</u><br><small>Converted on this device to grayscale BMP sized for the screen</small>
+    <input type="file" id="pick" accept="image/*,.bmp,.heic" multiple hidden></div><div class="walls" id="walls"></div>`;
+  let st, device = 'X3';
+  api('/api/status').then(s => device = s.device, () => {});
+  const load = async () => {
+    st = await api('/api/wallpaper');
+    $('#modeSeg').innerHTML = seg('mode', ['Random', 'Cycle', 'Fixed'], st.mode);
+    onSeg('mode', mode => api('/api/wallpaper', {mode}).then(r => { st = r; toast('Saved'); render(); }, fail));
+    render();
+  };
+  const render = () => {
+    const box = $('#walls');
+    if (!st.files.length) { box.innerHTML = '<p class="muted">No wallpapers in /sleep yet.</p>'; return; }
+    box.innerHTML = st.files.map(f => `<div class="wall ${st.mode === 2 && st.fixed === f ? 'on' : ''}" data-f="${esc(f)}">
+      <canvas></canvas><div><span title="${esc(f)}">${esc(f)}</span>
+      <button class="icon" data-a="fix" title="Use this one">★</button><button class="icon danger" data-a="del" title="Delete">✕</button></div></div>`).join('');
+    thumbs([...box.querySelectorAll('.wall')]);
+  };
+  const cache = viewWalls.cache || (viewWalls.cache = {});
+  async function thumbs(tiles) {
+    for (const t of tiles) {  // one at a time: the device serves files sequentially
+      const f = t.dataset.f, c = $('canvas', t);
+      try { const buf = cache[f] || (cache[f] = await (await fetch('/download?path=' + encodeURIComponent('/sleep/' + f))).arrayBuffer()); bmpThumb(buf, c); }
+      catch { c.outerHTML = '<div class="ph"></div>'; }
+      if (!document.body.contains(t)) return;
+    }
+  }
+  $('#walls').onclick = async e => {
+    const b = e.target.closest('button'); if (!b) return; const f = b.closest('.wall').dataset.f;
+    try {
+      if (b.dataset.a === 'fix') { st = await api('/api/wallpaper', {fixed: f, mode: 2}); toast('Wallpaper set'); load(); }
+      else if (confirm(`Delete ${f}?`)) {
+        await fetch('/delete', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'path=' + encodeURIComponent('/sleep/' + f)}).then(r => { if (!r.ok) throw new Error('Delete failed'); });
+        delete cache[f]; toast('Deleted'); load();
+      }
+    } catch (err) { fail(err); }
+  };
+  const upload = async files => {
+    for (const file of files) {
+      try {
+        toast(`Converting ${file.name}…`);
+        const out = await toWallpaper(file, device);
+        const fd = new FormData(); fd.append('file', out);
+        const r = await fetch('/upload?path=/sleep', {method: 'POST', body: fd});
+        if (!r.ok) throw new Error(await r.text());
+      } catch (err) { fail(new Error(`${file.name}: ${err.message}`)); }
+    }
+    toast('Uploaded'); load();
+  };
+  const drop = $('#drop'), pick = $('#pick');
+  drop.onclick = () => pick.click();
+  pick.onchange = () => upload([...pick.files]);
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); upload([...e.dataTransfer.files]); };
+  load().catch(fail);
+}
+
+// ---------- Income ----------
+async function viewIncome(m) {
+  m.innerHTML = `<h1>Income</h1><div class="card"><h2>Stripe key</h2><div id="keyState" class="muted">Loading…</div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><input id="key" type="password" autocomplete="off"
+    placeholder="rk_live_… (restricted, read-only)" style="flex:1;min-width:220px"><button class="primary" id="saveKey">Save</button></div>
+    <div style="display:flex;gap:8px;margin-top:10px"><button id="testKey">Test key</button><button class="danger" id="delKey">Remove</button></div>
+    <p class="hint muted" style="margin:12px 0 0">The key is stored on the SD card and never shown again. Use a restricted key with
+    <b>Charges: read</b> (Gross) and <b>Balance: read</b> (Net).</p><div id="testOut"></div></div>
+    <div class="card"><h2>Display</h2><div id="incomeSettings" class="muted">Loading…</div></div>`;
+  const showKey = k => $('#keyState').innerHTML = k.hasKey ? `<span class="pill ok">Saved</span> <code>${esc(k.keyHint)}</code>` : '<span class="pill bad">No key</span>';
+  api('/api/income').then(showKey, fail);
+  $('#saveKey').onclick = () => api('/api/income/key', {key: $('#key').value.trim()}).then(k => { $('#key').value = ''; showKey(k); toast('Key saved'); }, fail);
+  $('#delKey').onclick = () => confirm('Remove the Stripe key?') && api('/api/income/key/delete', {}).then(showKey, fail);
+  $('#testKey').onclick = async () => {
+    const out = $('#testOut'); out.innerHTML = '<p class="muted">Asking Stripe…</p>';
+    try {
+      const r = await api('/api/income/test', {});
+      const pill = (code, what) => `<div class="row"><span>${what}</span><span class="pill ${code === 200 ? 'ok' : 'bad'}">${
+        code === 200 ? 'Allowed' : code === 401 ? 'Invalid key' : code === 403 ? 'No permission' : code ? 'HTTP ' + code : 'No response'}</span></div>`;
+      out.innerHTML = pill(r.charges, 'Charges (Gross)') + pill(r.balance, 'Balance transactions (Net)');
+    } catch (e) { out.innerHTML = ''; fail(e); }
+  };
+  const all = await api('/api/settings').catch(fail); if (!all) return;
+  const pick = ['incomeAmount', 'incomeDayUtc', 'incomeLayout'], hints = {incomeAmount: 'Gross charges, or net after fees and refunds',
+    incomeDayUtc: 'UTC matches the Stripe dashboard', incomeLayout: 'Screen orientation for Income and Trains'};
+  $('#incomeSettings').innerHTML = pick.map(k => all.find(s => s.key === k)).filter(Boolean).map(s =>
+    `<div class="row"><div><div class="name">${esc(s.name)}</div><div class="hint">${hints[s.key]}</div></div>${seg('s-' + s.key, s.options, s.value)}</div>`).join('');
+  pick.forEach(k => $('#s-' + k) && onSeg('s-' + k, v => saveSetting(k, v)));
+}
+
+// ---------- Trains ----------
+async function viewTrains(m) {
+  m.innerHTML = `<h1>Trains</h1><div class="card" id="route">Loading…</div><div class="card"><h2>Station strip</h2>
+    <p class="hint muted" style="margin-top:0">The device's station strip follows the line. Pick favorites to show only those stations.</p><div id="favs"></div>
+    <div style="display:flex;gap:8px;margin-top:12px"><select id="addFav"></select><button id="addFavBtn">Add</button></div></div>`;
+  let t;
+  const opts = cur => t.stations.map((s, i) => `<option value="${i}" ${i === cur ? 'selected' : ''}>${esc(s.label)}</option>`).join('');
+  const save = patch => api('/api/trains', Object.assign({origin: t.origin, towards: t.towards, home: t.home, favorites: t.favorites}, patch))
+    .then(r => { t = r; render(); toast('Saved'); }, fail);
+  const render = () => {
+    $('#route').innerHTML = `<h2>Default board</h2>
+      <div class="row"><span class="name">From</span><select id="origin">${opts(t.origin)}</select></div>
+      <div class="row"><span class="name">Towards</span><select id="towards">${opts(t.towards)}</select></div>
+      <div class="row"><div><div class="name">Return trips go to</div><div class="hint">Station strip boards head here</div></div><select id="home">${opts(t.home)}</select></div>`;
+    ['origin', 'towards', 'home'].forEach(k => $('#' + k).onchange = e => save({[k]: +e.target.value}));
+    $('#favs').innerHTML = t.favorites.length ? t.favorites.map((f, i) => `<div class="list-item"><span class="grow">${esc(t.stations[f].label)}</span>
+      <button class="icon" data-i="${i}" data-a="up" ${i ? '' : 'disabled'}>↑</button><button class="icon" data-i="${i}" data-a="down" ${i < t.favorites.length - 1 ? '' : 'disabled'}>↓</button>
+      <button class="icon danger" data-i="${i}" data-a="rm">✕</button></div>`).join('') : '<p class="muted">No favorites: every station is shown.</p>';
+    $('#addFav').innerHTML = t.stations.map((s, i) => t.favorites.includes(i) || i === t.home ? '' : `<option value="${i}">${esc(s.label)}</option>`).join('');
+  };
+  $('#favs').onclick = e => {
+    const b = e.target.closest('button'); if (!b) return; const i = +b.dataset.i, f = [...t.favorites];
+    if (b.dataset.a === 'rm') f.splice(i, 1); else { const j = b.dataset.a === 'up' ? i - 1 : i + 1; [f[i], f[j]] = [f[j], f[i]]; }
+    save({favorites: f});
+  };
+  $('#addFavBtn').onclick = () => $('#addFav').value !== '' && save({favorites: [...t.favorites, +$('#addFav').value].slice(0, 6)});
+  try { t = await api('/api/trains'); render(); } catch (e) { fail(e); }
+}
+
+// ---------- Wi-Fi ----------
+async function viewWifi(m) {
+  m.innerHTML = `<h1>Wi-Fi</h1><div class="card"><h2>Saved networks</h2><p class="hint muted" style="margin-top:0">
+    The device joins the first available network in this order. Passwords are never shown.</p><div id="nets">Loading…</div></div>
+    <div class="card"><h2>Add network</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><input id="ssid" placeholder="Network name" style="flex:1;min-width:160px">
+    <input id="pass" type="password" placeholder="Password" style="flex:1;min-width:160px"><button class="primary" id="addNet">Save</button></div></div>`;
+  let nets = [];
+  const load = async () => {
+    nets = await api('/api/wifi');
+    $('#nets').innerHTML = nets.length ? nets.map((n, i) => `<div class="list-item"><span class="grow"><b>${esc(n.ssid)}</b>
+      ${n.isLastConnected ? ' <span class="pill ok">last used</span>' : ''}${n.hasPassword ? '' : ' <span class="pill">open</span>'}</span>
+      <button class="icon" data-i="${i}" data-a="up" ${i ? '' : 'disabled'}>↑</button><button class="icon" data-i="${i}" data-a="down" ${i < nets.length - 1 ? '' : 'disabled'}>↓</button>
+      <button class="icon danger" data-i="${i}" data-a="rm">✕</button></div>`).join('') : '<p class="muted">No saved networks.</p>';
+  };
+  $('#nets').onclick = async e => {
+    const b = e.target.closest('button'); if (!b) return; const i = +b.dataset.i;
+    try {
+      if (b.dataset.a === 'rm') { if (!confirm(`Forget ${nets[i].ssid}?`)) return; await api('/api/wifi/delete', {index: i}); }
+      else { const o = nets.map(n => n.ssid), j = b.dataset.a === 'up' ? i - 1 : i + 1; [o[i], o[j]] = [o[j], o[i]]; await api('/api/wifi/order', {ssids: o}); }
+      await load();
+    } catch (err) { fail(err); }
+  };
+  $('#addNet').onclick = async () => {
+    const ssid = $('#ssid').value.trim(); if (!ssid) return toast('Enter a network name', true);
+    const body = {ssid}; if ($('#pass').value) body.password = $('#pass').value;
+    try { await api('/api/wifi', body); $('#ssid').value = $('#pass').value = ''; toast('Saved'); load(); } catch (e) { fail(e); }
+  };
+  load().catch(fail);
+}
+
+// ---------- Settings ----------
+const HIDDEN = new Set(['clockUtcOffsetQ', 'clockHasBeenSynced', 'clockTimezone', 'incomeAmount', 'incomeDayUtc', 'incomeLayout', 'wallpaperMode', 'frontlightOn']);
+async function viewSettings(m) {
+  m.innerHTML = `<h1>Settings</h1><input class="search" id="q" placeholder="Search settings" type="search">
+    <div id="sets" class="muted">Loading…</div><div class="savebar" id="bar"><span class="muted" style="margin-right:auto;align-self:center" id="dirty"></span>
+    <button id="revert">Revert</button><button class="primary" id="save">Save</button></div>`;
+  let all, tzs = [], changes = {};
+  let dev = {};
+  try { [all, tzs, dev] = await Promise.all([api('/api/settings'), api('/api/timezones').catch(() => []), api('/api/device').catch(() => ({}))]); } catch (e) { return fail(e); }
+  const ctrl = s => {
+    const id = 'c-' + s.key;
+    if (s.type === 'toggle') return `<label class="switch"><input type="checkbox" id="${id}" ${s.value ? 'checked' : ''}><span></span></label>`;
+    if (s.type === 'enum') return `<select id="${id}">${s.options.map((o, i) => `<option value="${i}" ${i === s.value ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    if (s.type === 'value') return `<input type="number" id="${id}" value="${s.value}" min="${s.min}" max="${s.max}" step="${s.step}" style="width:96px">`;
+    return `<input id="${id}" type="${/password/i.test(s.name) ? 'password' : 'text'}" value="${esc(s.value)}">`;
+  };
+  const tzSetting = all.find(s => s.key === 'clockTimezone');
+  if (tzSetting && tzSetting.value >= tzs.length && dev.timezone != null) tzSetting.value = dev.timezone;  // 255 = never chosen
+  const render = q => {
+    const groups = {};
+    all.filter(s => !HIDDEN.has(s.key) && s.category !== 'None' && (!q || (s.name + ' ' + s.category).toLowerCase().includes(q)))
+      .forEach(s => (groups[s.category] = groups[s.category] || []).push(s));
+    let html = '';
+    if (tzSetting && tzs.length && (!q || 'timezone clock'.includes(q))) html += `<div class="card"><h2>Clock</h2><div class="row"><span class="name">Timezone</span>
+      <select id="c-clockTimezone">${tzs.map((t, i) => `<option value="${i}" ${i === tzSetting.value ? 'selected' : ''}>${esc(t.name)} (${esc(t.offset)})</option>`).join('')}</select></div></div>`;
+    for (const g in groups) html += `<div class="card"><h2>${esc(g)}</h2>${groups[g].map(s => `<div class="row"><span class="name">${esc(s.name)}</span>${ctrl(s)}</div>`).join('')}</div>`;
+    html += `<div class="card"><h2>More</h2><div class="row"><span class="name">Fonts</span><a class="btn" href="/fonts">Manage fonts</a></div>
+      <div class="row"><span class="name">OPDS catalogs</span><button id="opdsBtn">Edit</button></div><div id="opds"></div></div>`;
+    $('#sets').className = ''; $('#sets').innerHTML = html || '<p class="muted">No matches.</p>';
+    for (const k in changes) { const el = $('#c-' + k); if (el) el.type === 'checkbox' ? el.checked = !!changes[k] : el.value = changes[k]; }
+    $('#opdsBtn') && ($('#opdsBtn').onclick = opds);
+  };
+  $('#sets').oninput = $('#sets').onchange = e => {
+    const el = e.target; if (!el.id || !el.id.startsWith('c-')) return;
+    const key = el.id.slice(2), s = all.find(x => x.key === key);
+    const v = el.type === 'checkbox' ? (el.checked ? 1 : 0) : (s.type === 'enum' || s.type === 'value') ? parseInt(el.value, 10) : el.value;
+    if (v === s.value) delete changes[key]; else changes[key] = v;
+    const n = Object.keys(changes).length; $('#bar').classList.toggle('show', n > 0); $('#dirty').textContent = n + ' unsaved change' + (n > 1 ? 's' : '');
+  };
+  $('#q').oninput = e => render(e.target.value.trim().toLowerCase());
+  $('#revert').onclick = () => { changes = {}; $('#bar').classList.remove('show'); render($('#q').value.trim().toLowerCase()); };
+  $('#save').onclick = async () => {
+    try { await api('/api/settings', changes); all.forEach(s => { if (s.key in changes) s.value = changes[s.key]; });
+      changes = {}; $('#bar').classList.remove('show'); toast('Settings saved'); } catch (e) { fail(e); }
+  };
+  async function opds() {
+    const box = $('#opds'), list = await api('/api/opds').catch(fail) || [];
+    const form = (s, i) => `<div class="card" style="margin:10px 0 0;background:var(--panel-2)" data-i="${i}">
+      ${['name', 'url', 'username'].map(k => `<div class="row"><span class="name">${k}</span><input data-k="${k}" value="${esc(s[k] || '')}"></div>`).join('')}
+      <div class="row"><span class="name">password</span><input data-k="password" type="password" placeholder="${s.hasPassword ? '(unchanged)' : ''}"></div>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="primary" data-a="save">Save</button>${i >= 0 ? '<button class="danger" data-a="del">Delete</button>' : ''}</div></div>`;
+    box.innerHTML = list.map(form).join('') + form({}, -1);
+    box.onclick = async e => {
+      const b = e.target.closest('button'); if (!b) return; const c = b.closest('[data-i]'), i = +c.dataset.i;
+      try {
+        if (b.dataset.a === 'del') await api('/api/opds/delete', {index: i});
+        else { const d = {}; c.querySelectorAll('input').forEach(x => { if (x.value || x.dataset.k !== 'password') d[x.dataset.k] = x.value; }); if (i >= 0) d.index = i; await api('/api/opds', d); }
+        toast('Saved'); opds();
+      } catch (err) { fail(err); }
+    };
+  }
+  render('');
+}
+
+// ---------- Router ----------
+const VIEWS = {home: viewHome, files: viewFiles, walls: viewWalls, income: viewIncome, trains: viewTrains, wifi: viewWifi, settings: viewSettings};
+$('#nav').insertAdjacentHTML('beforeend', TABS.map(([k, n]) => `<a href="#${k}" data-k="${k}">${svg(k)}<span>${n}</span></a>`).join(''));
+function route() {
+  const k = location.hash.slice(1) || (location.pathname === '/settings' ? 'settings' : 'home');
+  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.k === k));
+  (VIEWS[k] || viewHome)($('#main'));
+  scrollTo(0, 0);
+}
+addEventListener('hashchange', route);
+route();
+</script>
+</body>
+</html>

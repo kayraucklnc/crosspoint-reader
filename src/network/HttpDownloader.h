@@ -46,6 +46,27 @@ class HttpDownloader {
                        const std::string& password = "");
 
   /**
+   * Stream the response body to onData, sending `authorization` verbatim as
+   * the Authorization header (e.g. "Bearer <token>"). statusOut receives the
+   * final HTTP status (0 when no response arrived).
+   */
+  static bool fetchUrlWithAuthorization(const std::string& url, const DataCallback& onData,
+                                        const std::string& authorization, int* statusOut = nullptr);
+
+  /**
+   * Stream the response body to onData with extra request headers, given as
+   * headerCount (name, value) pairs in `headers`.
+   */
+  static bool fetchUrlWithHeaders(const std::string& url, const DataCallback& onData, const char* const* headers,
+                                  int headerCount, int* statusOut = nullptr);
+
+  /**
+   * Requests `url` only for the server's Date response header (clock fallback
+   * when NTP is blocked). Only the wolfSSL transport exposes response headers.
+   */
+  static bool fetchDateHeader(const std::string& url, std::string& outDate);
+
+  /**
    * Download a file to the SD card with optional credentials.
    *
    * downgradeRedirectsToHttp rewrites followed redirect targets from https to

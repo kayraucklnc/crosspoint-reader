@@ -7,6 +7,7 @@
 #include <HalStorage.h>
 #include <LibraryBuilder.h>
 #include <Logging.h>
+#include <OrderedDither.h>
 #include <WiFi.h>
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
@@ -23,10 +24,11 @@
 #include "WifiCredentialStore.h"
 #include "html/FilesPageHtml.generated.h"
 #include "html/FontsPageHtml.generated.h"
-#include "html/HomePageHtml.generated.h"
-#include "html/SettingsPageHtml.generated.h"
+#include "WebAppApi.h"
+#include "html/AppPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
+#include "util/Timezones.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -192,6 +194,8 @@ void CrossPointWebServer::begin() {
   server->on("/api/wifi", HTTP_GET, [this] { handleGetWifiNetworks(); });
   server->on("/api/wifi", HTTP_POST, [this] { handlePostWifiNetwork(); });
   server->on("/api/wifi/delete", HTTP_POST, [this] { handleDeleteWifiNetwork(); });
+
+  registerWebAppApi(*server);
 
   server->onNotFound([this] { handleNotFound(); });
   LOG_DBG("WEB", "[MEM] Free heap after route setup: %d bytes", ESP.getFreeHeap());
@@ -378,7 +382,7 @@ static void sendStaticContent(WebServer* server, const char* data, size_t len, c
 }
 
 void CrossPointWebServer::handleRoot() const {
-  sendStaticContent(server.get(), HomePageHtml, sizeof(HomePageHtml), HomePageHtmlETag, "text/html");
+  sendStaticContent(server.get(), AppPageHtml, sizeof(AppPageHtml), AppPageHtmlETag, "text/html");
   LOG_DBG("WEB", "Served root page");
 }
 
@@ -1163,7 +1167,8 @@ void CrossPointWebServer::handleDelete() const {
 }
 
 void CrossPointWebServer::handleSettingsPage() const {
-  sendStaticContent(server.get(), SettingsPageHtml, sizeof(SettingsPageHtml), SettingsPageHtmlETag, "text/html");
+  // Settings is a panel of the single-page app; the app opens it from the path.
+  sendStaticContent(server.get(), AppPageHtml, sizeof(AppPageHtml), AppPageHtmlETag, "text/html");
   LOG_DBG("WEB", "Served settings page");
 }
 
@@ -1333,6 +1338,8 @@ void CrossPointWebServer::handlePostSettings() {
   }
 
   SETTINGS.saveToFile();
+  timezones::applyToClock();  // clockTimezone may have changed
+  ordered_dither::mode = SETTINGS.imageDithering;
 
   LOG_DBG("WEB", "Applied %d setting(s)", applied);
   server->send(200, "text/plain", String("Applied ") + String(applied) + " setting(s)");

@@ -1,0 +1,47 @@
+#pragma once
+
+#include <GfxRenderer.h>
+
+#include "activities/Activity.h"
+#include "network/StripeClient.h"
+
+// Stripe income dashboard: today's gross USD charges as a hero number plus a
+// dithered, smoothed five-day line chart. Refreshes in place: joins a saved WiFi
+// network silently, fetches, then drops WiFi. Confirm refreshes, Back exits.
+class IncomeActivity final : public Activity {
+ public:
+  explicit IncomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+      : Activity("Income", renderer, mappedInput) {}
+
+  void onEnter() override;
+  void onExit() override;
+  void loop() override;
+  bool skipLoopDelay() override { return state == State::CONNECTING || state == State::LOADING; }
+  void render(RenderLock&&) override;
+
+ private:
+  // PICKING: the WiFi picker is open because no saved network could be joined.
+  enum class State { CONNECTING, PICKING, LOADING, READY, NO_KEY, ERROR };
+  State state = State::CONNECTING;
+  const char* errorMessage = "";
+  IncomeSummary summary;
+  bool hasSummary = false;
+  bool wifiStartedHere = false;
+  bool firstRenderDone = false;
+  GfxRenderer::Orientation savedOrientation = GfxRenderer::Orientation::Portrait;
+
+  static StripeClient::Amount amountMode();
+  void startFetch();
+  void runFetch();
+  void runConnect();
+  void onWifiSelectionComplete(bool connected);
+  void stopWifi();
+
+  void renderDashboard(int width, int height) const;
+  // Returns the bottom y of the hero block.
+  int renderHero(int x, int y, int width, bool landscape) const;
+  // Status under the month total: progress while refreshing, time or error otherwise.
+  int renderStatus(int x, int y, int width, bool alignRight) const;
+  void renderChart(int x, int y, int width, int height) const;
+  void renderMessage(const char* title, const char* detail) const;
+};

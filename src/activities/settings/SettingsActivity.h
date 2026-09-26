@@ -29,6 +29,11 @@ enum class SettingAction {
   KeyboardLayouts,
   HomeButton,
   About,
+  BrowseFiles,
+  Library,
+  FileTransfer,
+  OpdsCatalog,
+  ChooseWallpaper,
 };
 
 struct SettingInfo {
@@ -180,6 +185,7 @@ class SettingsActivity final : public UiTabListActivity {
   std::vector<SettingInfo> readerSettings;
   std::vector<SettingInfo> controlsSettings;
   std::vector<SettingInfo> systemSettings;
+  std::vector<SettingInfo> advancedSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;
 
   bool preserveQuickResumeTimeoutOn = false;
@@ -197,9 +203,10 @@ class SettingsActivity final : public UiTabListActivity {
   std::vector<freeink::ui::ListItem> rowItems_;
   void rebuildRowItems();
 
-  static constexpr int categoryCount = 4;
+  static constexpr int categoryCount = 5;
   static constexpr StrId categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
-                                                         StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
+                                                         StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM,
+                                                         StrId::STR_CAT_ADVANCED};
 
   // --- UiTabListActivity contract ---
   int listCount() const override { return settingsCount; }

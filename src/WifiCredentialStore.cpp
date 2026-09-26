@@ -149,6 +149,33 @@ bool WifiCredentialStore::removeCredential(const std::string& ssid) {
   return saveToFile();
 }
 
+bool WifiCredentialStore::setOrder(const std::vector<std::string>& ssids) {
+  {
+    std::lock_guard<std::mutex> lock(credentialMutex);
+    std::vector<WifiCredential> ordered;
+    ordered.reserve(credentials.size());
+    for (const auto& ssid : ssids) {
+      const auto it = find_if(credentials.begin(), credentials.end(),
+                              [&ssid](const WifiCredential& cred) { return cred.ssid == ssid; });
+      if (it != credentials.end()) {
+        ordered.push_back(std::move(*it));
+        credentials.erase(it);
+      }
+    }
+    for (auto& rest : credentials) ordered.push_back(std::move(rest));
+    credentials = std::move(ordered);
+  }
+  return saveToFile();
+}
+
+int WifiCredentialStore::priorityOf(const std::string& ssid) const {
+  std::lock_guard<std::mutex> lock(credentialMutex);
+  for (size_t i = 0; i < credentials.size(); i++) {
+    if (credentials[i].ssid == ssid) return static_cast<int>(i);
+  }
+  return -1;
+}
+
 std::optional<WifiCredential> WifiCredentialStore::findCredential(const std::string& ssid) const {
   std::lock_guard<std::mutex> lock(credentialMutex);
 

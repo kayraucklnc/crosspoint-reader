@@ -21,6 +21,7 @@ Bitmap::~Bitmap() {
 
   delete atkinsonDitherer;
   delete fsDitherer;
+  delete tone;
 }
 
 uint16_t Bitmap::readLE16(HalFile& f) {
@@ -170,6 +171,9 @@ BmpReaderError Bitmap::parseHeaders() {
   //  - High-color + dithering enabled → error-diffusion dithering (Atkinson or Floyd-Steinberg)
   //  - High-color + dithering disabled → simple quantization (no error diffusion)
   const bool highColor = !nativePalette;
+  if (highColor && dithering && ordered_dither::bayer()) {
+    return buildTone();
+  }
   if (highColor && dithering) {
     if (USE_ATKINSON) {
       atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(width, originalThresholds);
@@ -193,6 +197,48 @@ BmpReaderError Bitmap::parseHeaders() {
   return BmpReaderError::Ok;
 }
 
+uint8_t Bitmap::rowLuminance(const uint8_t* rowBuffer, const int x) const {
+  switch (bpp) {
+    case 32:
+    case 24: {
+      const uint8_t* p = rowBuffer + x * (bpp / 8);
+      return (77u * p[2] + 150u * p[1] + 29u * p[0]) >> 8;
+    }
+    case 8:
+      return paletteLum[rowBuffer[x]];
+    case 4:
+      return paletteLum[(x & 1) ? (rowBuffer[x >> 1] & 0x0F) : (rowBuffer[x >> 1] >> 4)];
+    case 2:
+      return paletteLum[(rowBuffer[x >> 2] >> (6 - ((x & 3) * 2))) & 0x03];
+    default:
+      return paletteLum[(rowBuffer[x >> 3] & (0x80 >> (x & 7))) ? 1 : 0];
+  }
+}
+
+// One read of the pixel data to find the 1st/99th luminance percentiles, so the
+// ordered dither can stretch contrast before quantizing. Sampled every other row
+// and column: the histogram only needs the distribution, not every pixel.
+BmpReaderError Bitmap::buildTone() {
+  auto row = makeUniqueNoThrow<uint8_t[]>(rowBytes);
+  auto histogram = makeUniqueNoThrow<uint32_t[]>(256);
+  if (!row || !histogram) {
+    LOG_ERR("BMP", "OOM: tone histogram");
+    return BmpReaderError::OomDitherer;
+  }
+  memset(histogram.get(), 0, 256 * sizeof(uint32_t));
+  for (int y = 0; y < height; y++) {
+    if (file.read(row.get(), rowBytes) != rowBytes) break;
+    if (y & 1) continue;
+    for (int x = 0; x < width; x += 2) histogram[rowLuminance(row.get(), x)]++;
+  }
+  uint8_t lo = 0;
+  uint8_t hi = 255;
+  ordered_dither::percentiles(histogram.get(), lo, hi);
+  tone = new (std::nothrow) ordered_dither::Tone(lo, hi);
+  if (!tone) return BmpReaderError::OomDitherer;
+  return file.seek(bfOffBits) ? BmpReaderError::Ok : BmpReaderError::SeekPixelDataFailed;
+}
+
 // packed 2bpp output, 0 = black, 1 = dark gray, 2 = light gray, 3 = white
 BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   // Note: rowBuffer should be pre-allocated by the caller to size 'rowBytes'
@@ -208,7 +254,9 @@ BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   // Helper lambda to pack 2bpp color into the output stream
   auto packPixel = [&](const uint8_t lum) {
     uint8_t color;
-    if (atkinsonDitherer) {
+    if (tone) {
+      color = ordered_dither::level4((*tone)(lum), currentX, prevRowY);
+    } else if (atkinsonDitherer) {
       color = atkinsonDitherer->processPixel(adjustPixel(lum), currentX);
     } else if (fsDitherer) {
       color = fsDitherer->processPixel(adjustPixel(lum), currentX);

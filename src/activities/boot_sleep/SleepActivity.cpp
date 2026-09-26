@@ -11,6 +11,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <OrderedDither.h>
 #include <PNGdec.h>
 #include <Txt.h>
 #include <Xtc.h>
@@ -24,6 +25,7 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "util/WallpaperStore.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -503,6 +505,7 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
+  ordered_dither::mode = SETTINGS.imageDithering;
 
   const bool renderQuickResume =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -586,15 +589,16 @@ void SleepActivity::renderCustomSleepScreen() const {
     file.close();
   }
 
-  std::string selectedPath;
-  if (!selectRandomSleepFile("/.sleep", SleepRecentKind::Standard, selectedPath)) {
+  // Cycle/Fixed pick from /sleep; Random (or an empty /sleep) keeps the random pick.
+  std::string selectedPath = wallpaper::pathForNextSleep();
+  if (selectedPath.empty() && !selectRandomSleepFile("/.sleep", SleepRecentKind::Standard, selectedPath)) {
     selectRandomSleepFile("/sleep", SleepRecentKind::Standard, selectedPath);
   }
 
   if (!selectedPath.empty()) {
     HalFile randFile;
     if (Storage.openFileForRead("SLP", selectedPath, randFile)) {
-      LOG_DBG("SLP", "Randomly loading: %s", selectedPath.c_str());
+      LOG_DBG("SLP", "Loading wallpaper: %s", selectedPath.c_str());
       delay(100);
       Bitmap bitmap(randFile, true,
                     renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported() &&

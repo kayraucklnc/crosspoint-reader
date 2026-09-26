@@ -1,5 +1,7 @@
 #include "JpegToBmpConverter.h"
 
+#include <OrderedDither.h>
+
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <JPEGDEC.h>
@@ -268,6 +270,13 @@ static void yieldDuringDecodeBlock(BmpConvertCtx* ctx) {
   yieldToIdle();
 }
 
+// Streamed JPEG decode has no histogram pass, so covers get the fixed tone curve
+// (S-curve + gamma) without auto-levels.
+const ordered_dither::Tone& coverTone() {
+  static const ordered_dither::Tone tone;
+  return tone;
+}
+
 // Write a fully-assembled output row (grayscale bytes, length outWidth) to BMP
 static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) {
   memset(ctx->bmpRow.get(), 0, ctx->bytesPerRow);
@@ -278,8 +287,9 @@ static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) 
     }
   } else if (ctx->oneBit) {
     for (int x = 0; x < ctx->outWidth; x++) {
-      const uint8_t bit = ctx->atkinson1BitDitherer ? ctx->atkinson1BitDitherer->processPixel(srcRow[x], x)
-                                                    : quantize1bit(srcRow[x], x, outY);
+      const uint8_t bit = ordered_dither::bayer()        ? ordered_dither::level2(coverTone()(srcRow[x]), x, outY)
+                          : ctx->atkinson1BitDitherer ? ctx->atkinson1BitDitherer->processPixel(srcRow[x], x)
+                                                      : quantize1bit(srcRow[x], x, outY);
       ctx->bmpRow[x / 8] |= (bit << (7 - (x % 8)));
     }
     if (ctx->atkinson1BitDitherer) ctx->atkinson1BitDitherer->nextRow();
@@ -287,7 +297,9 @@ static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) 
     for (int x = 0; x < ctx->outWidth; x++) {
       const uint8_t gray = adjustPixel(srcRow[x]);
       uint8_t twoBit;
-      if (ctx->atkinsonDitherer) {
+      if (ordered_dither::bayer()) {
+        twoBit = ordered_dither::level4(coverTone()(srcRow[x]), x, outY);
+      } else if (ctx->atkinsonDitherer) {
         twoBit = ctx->atkinsonDitherer->processPixel(gray, x);
       } else if (ctx->fsDitherer) {
         twoBit = ctx->fsDitherer->processPixel(gray, x);
@@ -400,16 +412,20 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
   } else if (ctx->oneBit) {
     for (int x = 0; x < ctx->outWidth; x++) {
       const uint8_t gray = (ctx->rowCount[x] > 0) ? (ctx->rowAccum[x] / ctx->rowCount[x]) : 0;
-      const uint8_t bit = ctx->atkinson1BitDitherer ? ctx->atkinson1BitDitherer->processPixel(gray, x)
-                                                    : quantize1bit(gray, x, ctx->currentOutY);
+      const uint8_t bit = ordered_dither::bayer()        ? ordered_dither::level2(coverTone()(gray), x, ctx->currentOutY)
+                          : ctx->atkinson1BitDitherer ? ctx->atkinson1BitDitherer->processPixel(gray, x)
+                                                      : quantize1bit(gray, x, ctx->currentOutY);
       ctx->bmpRow[x / 8] |= (bit << (7 - (x % 8)));
     }
     if (ctx->atkinson1BitDitherer) ctx->atkinson1BitDitherer->nextRow();
   } else {
     for (int x = 0; x < ctx->outWidth; x++) {
-      const uint8_t gray = adjustPixel((ctx->rowCount[x] > 0) ? (ctx->rowAccum[x] / ctx->rowCount[x]) : 0);
+      const uint8_t raw = (ctx->rowCount[x] > 0) ? (ctx->rowAccum[x] / ctx->rowCount[x]) : 0;
+      const uint8_t gray = adjustPixel(raw);
       uint8_t twoBit;
-      if (ctx->atkinsonDitherer) {
+      if (ordered_dither::bayer()) {
+        twoBit = ordered_dither::level4(coverTone()(raw), x, ctx->currentOutY);
+      } else if (ctx->atkinsonDitherer) {
         twoBit = ctx->atkinsonDitherer->processPixel(gray, x);
       } else if (ctx->fsDitherer) {
         twoBit = ctx->fsDitherer->processPixel(gray, x);
