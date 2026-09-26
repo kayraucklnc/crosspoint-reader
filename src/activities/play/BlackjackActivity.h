@@ -10,9 +10,8 @@
 // Left = Hit, Right = Stand, side Up/Down = bet +/- between hands or Double in
 // a hand, Confirm = Deal, hold Confirm = rules, Back = exit.
 //
-// The felt is a pure function of (x, y), so any region can be repainted in
-// place: each change redraws only the dirty bands and FAST-refreshes; every new
-// hand starts with a HALF refresh to clear ghosting of the dark table.
+// Light table: each change clears and redraws only its dirty horizontal band
+// with a FAST refresh; every new hand starts with a HALF refresh.
 class BlackjackActivity final : public Activity {
  public:
   explicit BlackjackActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -66,11 +65,11 @@ class BlackjackActivity final : public Activity {
   void save();
 
   // Layout (portrait-first, derived from the screen height).
-  int dealerY() const { return 74; }
+  int dealerY() const { return 66; }
   int playerY() const;
   int bottom() const;
 
-  void paintFelt(int x0, int y0, int x1, int y1) const;
+  void clearBand(int y0, int y1) const;
   void drawTop() const;
   void drawHand(const uint8_t* cards, int count, int y, bool hideSecond, const char* label, int value) const;
   void drawMid() const;

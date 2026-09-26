@@ -7,8 +7,6 @@
 #include "MappedInputManager.h"
 #include "SketchActivity.h"
 #include "SnakeActivity.h"
-#include "TiltMazeActivity.h"
-#include "ZenGardenActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -29,15 +27,9 @@ void PlayMenuActivity::open() {
   std::unique_ptr<Activity> game;
   switch (selected) {
     case 0:
-      game = makeUniqueNoThrow<ZenGardenActivity>(renderer, mappedInput);
-      break;
-    case 1:
-      game = makeUniqueNoThrow<TiltMazeActivity>(renderer, mappedInput);
-      break;
-    case 2:
       game = makeUniqueNoThrow<SnakeActivity>(renderer, mappedInput);
       break;
-    case 3:
+    case 1:
       game = makeUniqueNoThrow<BlackjackActivity>(renderer, mappedInput);
       break;
     default:
@@ -70,38 +62,20 @@ void PlayMenuActivity::loop() {
 
 // Tiny procedural previews: no bitmap assets.
 void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, const int size) const {
-  const int c = size / 2;
   switch (index) {
     case 0: {
-      for (int row = 6; row < size - 6; row += 6) renderer.drawLine(x + 4, y + row, x + size - 4, y + row, true);
-      renderer.fillRect(x + c - 14, y + c - 14, 28, 28, false);
-      renderer.fillRoundedRect(x + c - 11, y + c - 11, 22, 22, 11, Color::Black);
-      break;
-    }
-    case 1: {
-      // A fixed little maze.
-      static constexpr int8_t WALLS[][4] = {{0, 0, 6, 0}, {0, 6, 6, 6}, {0, 0, 0, 5}, {6, 1, 6, 6}, {2, 0, 2, 4},
-                                            {4, 2, 4, 6}, {2, 4, 3, 4}, {4, 2, 5, 2}};
-      const int u = size / 6;
-      for (const auto& w : WALLS) {
-        renderer.fillRect(x + w[0] * u - 1, y + w[1] * u - 1, (w[2] - w[0]) * u + 3, (w[3] - w[1]) * u + 3, true);
-      }
-      renderer.fillRoundedRect(x + u / 2 - 5, y + u / 2 + u - 5, 10, 10, 5, Color::Black);
-      break;
-    }
-    case 2: {
       constexpr int CELL = 12;
       static constexpr int8_t PATH[][2] = {{0, 4}, {1, 4}, {2, 4}, {2, 3}, {2, 2}, {3, 2}, {4, 2}, {4, 1}};
       for (const auto& p : PATH) renderer.fillRect(x + 6 + p[0] * CELL, y + 6 + p[1] * CELL, CELL - 2, CELL - 2, true);
       renderer.fillRect(x + 6 + 4 * CELL + 3, y + 6 + 4 * CELL + 3, CELL - 6, CELL - 6, true);
       break;
     }
-    case 3: {
-      // Two fanned cards on black.
-      renderer.fillRoundedRect(x, y, size, size, 8, Color::Black);
+    case 1: {
+      // Two fanned cards.
       renderer.fillRoundedRect(x + 10, y + 12, 30, 44, 4, Color::White);
+      renderer.drawRoundedRect(x + 10, y + 12, 30, 44, 2, 4, true);
       renderer.fillRoundedRect(x + 30, y + 18, 30, 44, 4, Color::White);
-      renderer.drawRoundedRect(x + 30, y + 18, 30, 44, 1, 4, true);
+      renderer.drawRoundedRect(x + 30, y + 18, 30, 44, 2, 4, true);
       renderer.drawText(SMALL_FONT_ID, x + 36, y + 22, "A", true, EpdFontFamily::BOLD);
       renderer.drawText(SMALL_FONT_ID, x + 14, y + 16, "K", true, EpdFontFamily::BOLD);
       break;
@@ -123,10 +97,9 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
 
 void PlayMenuActivity::renderItem(const int index, const int x, const int y, const int width,
                                   const int height) const {
-  static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_ZEN, StrId::STR_PLAY_MAZE, StrId::STR_PLAY_SNAKE,
-                                                StrId::STR_PLAY_BLACKJACK, StrId::STR_PLAY_SKETCH};
-  static constexpr StrId DESCRIPTIONS[ITEM_COUNT] = {StrId::STR_PLAY_ZEN_DESC, StrId::STR_PLAY_MAZE_DESC,
-                                                     StrId::STR_PLAY_SNAKE_DESC, StrId::STR_PLAY_BLACKJACK_DESC,
+  static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_BLACKJACK,
+                                                StrId::STR_PLAY_SKETCH};
+  static constexpr StrId DESCRIPTIONS[ITEM_COUNT] = {StrId::STR_PLAY_SNAKE_DESC, StrId::STR_PLAY_BLACKJACK_DESC,
                                                      StrId::STR_PLAY_SKETCH_DESC};
   const bool focused = index == selected;
   renderer.drawRoundedRect(x, y, width, height, focused ? FOCUS_FRAME : 1, 10, true);

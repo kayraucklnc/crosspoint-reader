@@ -1,6 +1,5 @@
 #include "BlackjackActivity.h"
 
-#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -19,16 +18,12 @@ constexpr const char* SAVE_PATH = "/.crosspoint/blackjack.json";
 constexpr int32_t START_BANK = 1000;
 constexpr int BET_STEPS[] = {10, 25, 50, 100, 250, 500};
 constexpr int BET_STEP_COUNT = sizeof(BET_STEPS) / sizeof(BET_STEPS[0]);
-constexpr int CARD_W = 84;
-constexpr int CARD_H = 120;
+constexpr int CARD_W = 118;
+constexpr int CARD_H = 168;
 constexpr int SIDE_GAP = 48;  // keeps cards clear of the side-button hints
 constexpr unsigned long DEALER_STEP_MS = 650;
 constexpr unsigned long HELP_HOLD_MS = 700;
 constexpr const char* RANKS[13] = {"A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"};
-constexpr uint8_t BAYER[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
-constexpr int SIDE_HINT_Y = 155;  // matches BaseTheme's edge side-button hint position
-constexpr int SIDE_HINT_W = 30;
-constexpr int SIDE_HINT_H = 80;
 
 void money(char* out, const size_t size, const int32_t value) { snprintf(out, size, "$%ld", static_cast<long>(value)); }
 }  // namespace
@@ -251,42 +246,25 @@ int BlackjackActivity::bottom() const {
   return renderer.getScreenHeight() - UITheme::getInstance().getMetrics().buttonHintsHeight - 4;
 }
 
-int BlackjackActivity::playerY() const { return bottom() - CARD_H - 150; }
+int BlackjackActivity::playerY() const { return bottom() - CARD_H - 120; }
 
-// Black felt lit by a soft oval spotlight: ordered dither whose density falls
-// off with distance from the centre of the table.
-void BlackjackActivity::paintFelt(int x0, int y0, int x1, int y1) const {
-  const int width = renderer.getScreenWidth();
-  x0 = std::max(x0, 0);
-  y0 = std::max(y0, 0);
-  x1 = std::min(x1, width - 1);
-  y1 = std::min(y1, bottom());
-  if (x0 > x1 || y0 > y1) return;
-  renderer.fillRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1, true);
-  const int cx = width / 2, cy = (dealerY() + playerY() + CARD_H) / 2;
-  const int rx = width * 3 / 5, ry = bottom() / 2;
-  for (int y = y0; y <= y1; y++) {
-    const int ny = (y - cy) * 256 / ry;
-    if (ny * ny >= 256 * 256) continue;
-    for (int x = x0; x <= x1; x++) {
-      const int nx = (x - cx) * 256 / rx;
-      const int d2 = (nx * nx + ny * ny) >> 8;  // 0 at centre, 256 on the rim
-      const int level = 5 - d2 * 6 / 256;
-      if (level > 0 && BAYER[y & 3][x & 3] < level) renderer.drawPixel(x, y, false);
-    }
-  }
+// A calm white table: bands are simply cleared before being redrawn.
+void BlackjackActivity::clearBand(const int y0, const int y1) const {
+  const int top = std::max(y0, 0), low = std::min(y1, bottom());
+  if (top <= low) renderer.fillRect(0, top, renderer.getScreenWidth(), low - top + 1, false);
 }
 
 void BlackjackActivity::drawTop() const {
   const int width = renderer.getScreenWidth();
-  paintFelt(0, 0, width - 1, dealerY() - 7);
-  renderer.drawText(UI_12_FONT_ID, 20, 16, tr(STR_BJ_TITLE), false, EpdFontFamily::BOLD);
+  clearBand(0, dealerY() - 7);
+  renderer.drawText(UI_12_FONT_ID, 20, 16, tr(STR_BJ_TITLE), true, EpdFontFamily::BOLD);
   char text[32], amount[16];
   money(amount, sizeof(amount), bank);
   snprintf(text, sizeof(text), "%s  %s", tr(STR_BJ_BANK), amount);
   const int w = renderer.getTextWidth(UI_12_FONT_ID, text, EpdFontFamily::BOLD);
-  renderer.drawText(UI_12_FONT_ID, width - w - 20, 16, text, false, EpdFontFamily::BOLD);
-  renderer.drawLine(20, 52, width - 21, 52, false);
+  renderer.drawText(UI_12_FONT_ID, width - w - 20, 16, text, true, EpdFontFamily::BOLD);
+  renderer.drawLine(20, 50, width - 21, 50, 2, true);
+  renderer.drawLine(20, 54, width - 21, 54, true);
 }
 
 void BlackjackActivity::drawSuitShape(const int suit, const int cx, const int cy, const int r, const bool black) const {
@@ -336,23 +314,25 @@ void BlackjackActivity::drawSuit(const int suit, const int cx, const int cy, con
 
 void BlackjackActivity::drawCard(const int x, const int y, const uint8_t card) const {
   const int rank = card % 13, suit = card / 13;
-  renderer.fillRoundedRect(x, y, CARD_W, CARD_H, 8, Color::White);
-  renderer.drawRoundedRect(x + 3, y + 3, CARD_W - 6, CARD_H - 6, 1, 6, true);
-  renderer.drawText(UI_12_FONT_ID, x + 9, y + 6, RANKS[rank], true, EpdFontFamily::BOLD);
-  drawSuit(suit, x + 17, y + 44, 8, true);
+  renderer.fillRoundedRect(x, y, CARD_W, CARD_H, 10, Color::White);
+  renderer.drawRoundedRect(x, y, CARD_W, CARD_H, 3, 10, true);
+  renderer.drawText(UI_12_FONT_ID, x + 11, y + 8, RANKS[rank], true, EpdFontFamily::BOLD);
+  drawSuit(suit, x + 21, y + 50, 10, true);
   const int tw = renderer.getTextWidth(UI_12_FONT_ID, RANKS[rank], EpdFontFamily::BOLD);
-  renderer.drawText(UI_12_FONT_ID, x + CARD_W - 9 - tw, y + CARD_H - 34, RANKS[rank], true, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, x + CARD_W - 11 - tw, y + CARD_H - 38, RANKS[rank], true, EpdFontFamily::BOLD);
+  drawSuit(suit, x + CARD_W - 21, y + CARD_H - 50, 10, true);
   if (rank >= 10) {
-    // Court cards: a framed panel around the pip.
-    renderer.drawRect(x + 26, y + 26, CARD_W - 40, CARD_H - 52, 2, true);
-    renderer.drawRect(x + 30, y + 30, CARD_W - 48, CARD_H - 60, 1, true);
+    // Court cards: a double frame around the pip.
+    renderer.drawRect(x + 36, y + 34, CARD_W - 72, CARD_H - 68, 2, true);
+    renderer.drawRect(x + 40, y + 38, CARD_W - 80, CARD_H - 76, 1, true);
   }
-  drawSuit(suit, x + CARD_W / 2 + 6, y + CARD_H / 2, rank >= 10 ? 13 : 18, true);
+  drawSuit(suit, x + CARD_W / 2, y + CARD_H / 2, rank >= 10 ? 14 : 26, true);
 }
 
 void BlackjackActivity::drawCardBack(const int x, const int y) const {
-  renderer.fillRoundedRect(x, y, CARD_W, CARD_H, 8, Color::White);
-  renderer.fillRect(x + 5, y + 5, CARD_W - 10, CARD_H - 10, true);
+  renderer.fillRoundedRect(x, y, CARD_W, CARD_H, 10, Color::Black);
+  renderer.fillRect(x + 6, y + 6, CARD_W - 12, CARD_H - 12, false);
+  renderer.fillRect(x + 8, y + 8, CARD_W - 16, CARD_H - 16, true);
   const auto clip = renderer.getClipRect();
   renderer.setClipRect(x + 9, y + 9, CARD_W - 18, CARD_H - 18);
   for (int d = -CARD_H; d < CARD_W; d += 10) {
@@ -368,7 +348,7 @@ void BlackjackActivity::drawCardBack(const int x, const int y) const {
 void BlackjackActivity::drawHand(const uint8_t* cards, const int count, const int y, const bool hideSecond,
                                  const char* label, const int value) const {
   const int width = renderer.getScreenWidth();
-  paintFelt(0, y - 6, width - 1, y + CARD_H + 33);
+  clearBand(y - 6, y + CARD_H + 33);
   const int avail = width - 2 * SIDE_GAP - CARD_W;
   const int step = count > 1 ? std::min(CARD_W + 10, avail / (count - 1)) : 0;
   const int x0 = (width - (CARD_W + step * (count - 1))) / 2;
@@ -387,22 +367,24 @@ void BlackjackActivity::drawHand(const uint8_t* cards, const int count, const in
     snprintf(text, sizeof(text), "%s", label);
   }
   const int w = renderer.getTextWidth(UI_10_FONT_ID, text, EpdFontFamily::BOLD);
-  renderer.drawText(UI_10_FONT_ID, (width - w) / 2, y + CARD_H + 6, text, false, EpdFontFamily::BOLD);
+  renderer.drawText(UI_10_FONT_ID, (width - w) / 2, y + CARD_H + 6, text, true, EpdFontFamily::BOLD);
 }
 
 void BlackjackActivity::drawMid() const {
   const int width = renderer.getScreenWidth();
   const int top = dealerY() + CARD_H + 34, low = playerY() - 7;
-  paintFelt(0, top, width - 1, low);
-  // Table print: a dashed arc with the house rules.
-  const int arcY = top + 14;
-  for (int x = 50; x < width - 50; x += 12) {
+  clearBand(top, low);
+  // Table print: one thin rail arc with the house rules beneath it.
+  const int arcY = top + 10;
+  int prevX = 40, prevY = arcY;
+  for (int x = 40; x <= width - 40; x += 8) {
     const int dx = x - width / 2;
     const int y = arcY + (width / 2 * width / 2 - dx * dx) / (width * 3);
-    renderer.fillRect(x, y, 6, 2, false);
+    if (x > 40) renderer.drawLine(prevX, prevY, x, y, true);
+    prevX = x, prevY = y;
   }
-  renderer.drawCenteredText(SMALL_FONT_ID, arcY + 56, tr(STR_BJ_TABLE_PAYS), false);
-  renderer.drawCenteredText(SMALL_FONT_ID, arcY + 76, tr(STR_BJ_TABLE_STANDS), false);
+  renderer.drawCenteredText(SMALL_FONT_ID, arcY + 56, tr(STR_BJ_TABLE_PAYS));
+  renderer.drawCenteredText(SMALL_FONT_ID, arcY + 76, tr(STR_BJ_TABLE_STANDS));
 
   char line[40];
   const char* message = nullptr;
@@ -431,7 +413,6 @@ void BlackjackActivity::drawMid() const {
   const int w = renderer.getTextWidth(UI_12_FONT_ID, message, EpdFontFamily::BOLD) + 48;
   const int boxY = (arcY + 100 + low) / 2 - 22;
   renderer.fillRect((width - w) / 2, boxY, w, 44, true);
-  renderer.drawRect((width - w) / 2, boxY, w, 44, 2, false);
   renderer.drawRect((width - w) / 2 + 4, boxY + 4, w - 8, 36, 1, false);
   renderer.drawCenteredText(UI_12_FONT_ID, boxY + 9, message, false, EpdFontFamily::BOLD);
 }
@@ -439,10 +420,10 @@ void BlackjackActivity::drawMid() const {
 void BlackjackActivity::drawBet() const {
   const int width = renderer.getScreenWidth();
   const int top = playerY() + CARD_H + 34;
-  paintFelt(0, top, width - 1, bottom());
+  clearBand(top, bottom());
   const int amount = state == State::BETTING || state == State::RESULT ? bet() : wager;
   // A side-on chip stack, one chip per 25.
-  const int chips = std::clamp(amount / 25 + 1, 1, 10);
+  const int chips = std::clamp(amount / 50 + 1, 1, 7);
   const int baseY = bottom() - 16;
   const int cx = width / 2;
   for (int i = 0; i < chips; i++) {
@@ -454,7 +435,7 @@ void BlackjackActivity::drawBet() const {
   char text[24], value[16];
   money(value, sizeof(value), amount);
   snprintf(text, sizeof(text), "%s %s", tr(STR_BJ_BET), value);
-  renderer.drawText(UI_12_FONT_ID, cx + 46, baseY - 26, text, false, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, cx + 46, baseY - 26, text, true, EpdFontFamily::BOLD);
 }
 
 void BlackjackActivity::drawHints() const {
@@ -465,25 +446,10 @@ void BlackjackActivity::drawHints() const {
   const auto labels = mappedInput.mapLabels(tr(STR_EXIT), betting ? tr(STR_BJ_DEAL) : "", playing ? tr(STR_BJ_HIT) : "",
                                             playing ? tr(STR_BJ_STAND) : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  if (gpio.hasTouch()) return;
-  // Side-button hints in the table's style (the theme's are black-on-white).
   const bool canDouble = playing && playerCount == 2 && bank >= wager;
   const char* up = betting ? tr(STR_BJ_BET_UP) : (canDouble ? tr(STR_BJ_DOUBLE) : "");
   const char* down = betting ? tr(STR_BJ_BET_DOWN) : (canDouble ? tr(STR_BJ_DOUBLE) : "");
-  const bool edge = gpio.hasEdgeSideButtons();
-  const int xs[2] = {edge ? 4 : width - 4 - SIDE_HINT_W, width - 4 - SIDE_HINT_W};
-  const int ys[2] = {edge ? SIDE_HINT_Y : 345, edge ? SIDE_HINT_Y : 345 + SIDE_HINT_H + 4};
-  const char* texts[2] = {up, down};
-  for (int i = 0; i < 2; i++) {
-    paintFelt(xs[i], ys[i], xs[i] + SIDE_HINT_W - 1, ys[i] + SIDE_HINT_H - 1);
-    if (!texts[i][0]) continue;
-    renderer.drawRect(xs[i], ys[i], SIDE_HINT_W, SIDE_HINT_H, 1, false);
-    const int tw = renderer.getTextWidth(SMALL_FONT_ID, texts[i]);
-    const int th = renderer.getTextHeight(SMALL_FONT_ID);
-    renderer.fillRect(xs[i] + 1, ys[i] + 1, SIDE_HINT_W - 2, SIDE_HINT_H - 2, true);
-    renderer.drawTextRotated90CW(SMALL_FONT_ID, xs[i] + (SIDE_HINT_W - th) / 2, ys[i] + (SIDE_HINT_H + tw) / 2,
-                                 texts[i], false);
-  }
+  GUI.drawSideButtonHints(renderer, up, down);
 }
 
 void BlackjackActivity::drawHelp() const {
@@ -494,6 +460,7 @@ void BlackjackActivity::drawHelp() const {
   constexpr int LINE_H = 58;
   const int boxH = 70 + LINE_H * static_cast<int>(sizeof(LINES) / sizeof(LINES[0]));
   renderer.fillRoundedRect(boxX, boxY, boxW, boxH, 12, Color::White);
+  renderer.drawRoundedRect(boxX, boxY, boxW, boxH, 2, 12, true);
   renderer.drawRoundedRect(boxX + 5, boxY + 5, boxW - 10, boxH - 10, 2, 9, true);
   renderer.drawCenteredText(UI_12_FONT_ID, boxY + 20, tr(STR_BJ_HELP_TITLE), true, EpdFontFamily::BOLD);
   int y = boxY + 64;

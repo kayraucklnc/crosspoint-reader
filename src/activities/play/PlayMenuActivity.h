@@ -3,7 +3,7 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-// Play: five small e-ink games. Up/Down or Left/Right pick one, Confirm opens
+// Play: three small e-ink games. Up/Down or Left/Right pick one, Confirm opens
 // it, Back returns Home. Each toy runs on top of this menu and finishes back to it.
 class PlayMenuActivity final : public Activity {
  public:
@@ -15,7 +15,7 @@ class PlayMenuActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  static constexpr int ITEM_COUNT = 5;
+  static constexpr int ITEM_COUNT = 3;
 
   ButtonNavigator buttonNavigator;
   int selected = 0;
