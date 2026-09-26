@@ -3,7 +3,9 @@
 #include <I18n.h>
 #include <Memory.h>
 
+#include "BlackjackActivity.h"
 #include "MappedInputManager.h"
+#include "SketchActivity.h"
 #include "SnakeActivity.h"
 #include "TiltMazeActivity.h"
 #include "ZenGardenActivity.h"
@@ -32,8 +34,14 @@ void PlayMenuActivity::open() {
     case 1:
       game = makeUniqueNoThrow<TiltMazeActivity>(renderer, mappedInput);
       break;
-    default:
+    case 2:
       game = makeUniqueNoThrow<SnakeActivity>(renderer, mappedInput);
+      break;
+    case 3:
+      game = makeUniqueNoThrow<BlackjackActivity>(renderer, mappedInput);
+      break;
+    default:
+      game = makeUniqueNoThrow<SketchActivity>(renderer, mappedInput);
       break;
   }
   if (!game) {
@@ -81,11 +89,33 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
       renderer.fillRoundedRect(x + u / 2 - 5, y + u / 2 + u - 5, 10, 10, 5, Color::Black);
       break;
     }
-    default: {
+    case 2: {
       constexpr int CELL = 12;
       static constexpr int8_t PATH[][2] = {{0, 4}, {1, 4}, {2, 4}, {2, 3}, {2, 2}, {3, 2}, {4, 2}, {4, 1}};
       for (const auto& p : PATH) renderer.fillRect(x + 6 + p[0] * CELL, y + 6 + p[1] * CELL, CELL - 2, CELL - 2, true);
       renderer.fillRect(x + 6 + 4 * CELL + 3, y + 6 + 4 * CELL + 3, CELL - 6, CELL - 6, true);
+      break;
+    }
+    case 3: {
+      // Two fanned cards on black.
+      renderer.fillRoundedRect(x, y, size, size, 8, Color::Black);
+      renderer.fillRoundedRect(x + 10, y + 12, 30, 44, 4, Color::White);
+      renderer.fillRoundedRect(x + 30, y + 18, 30, 44, 4, Color::White);
+      renderer.drawRoundedRect(x + 30, y + 18, 30, 44, 1, 4, true);
+      renderer.drawText(SMALL_FONT_ID, x + 36, y + 22, "A", true, EpdFontFamily::BOLD);
+      renderer.drawText(SMALL_FONT_ID, x + 14, y + 16, "K", true, EpdFontFamily::BOLD);
+      break;
+    }
+    default: {
+      // A quick pencil face.
+      const int c = size / 2;
+      renderer.drawRoundedRect(x + c - 22, y + 8, 44, 54, 2, 22, true);
+      renderer.fillRect(x + c - 11, y + 28, 4, 4, true);
+      renderer.fillRect(x + c + 7, y + 28, 4, 4, true);
+      renderer.drawLine(x + c - 8, y + 46, x + c + 8, y + 46, 2, true);
+      renderer.drawLine(x + c - 30, y + 10, x + c + 30, y + 4, 2, true);
+      renderer.drawLine(x + c - 20, y + 70, x + c - 30, y + 72, 2, true);
+      renderer.drawLine(x + c + 20, y + 70, x + c + 30, y + 72, 2, true);
       break;
     }
   }
@@ -93,9 +123,11 @@ void PlayMenuActivity::drawGlyph(const int index, const int x, const int y, cons
 
 void PlayMenuActivity::renderItem(const int index, const int x, const int y, const int width,
                                   const int height) const {
-  static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_ZEN, StrId::STR_PLAY_MAZE, StrId::STR_PLAY_SNAKE};
+  static constexpr StrId TITLES[ITEM_COUNT] = {StrId::STR_PLAY_ZEN, StrId::STR_PLAY_MAZE, StrId::STR_PLAY_SNAKE,
+                                                StrId::STR_PLAY_BLACKJACK, StrId::STR_PLAY_SKETCH};
   static constexpr StrId DESCRIPTIONS[ITEM_COUNT] = {StrId::STR_PLAY_ZEN_DESC, StrId::STR_PLAY_MAZE_DESC,
-                                                     StrId::STR_PLAY_SNAKE_DESC};
+                                                     StrId::STR_PLAY_SNAKE_DESC, StrId::STR_PLAY_BLACKJACK_DESC,
+                                                     StrId::STR_PLAY_SKETCH_DESC};
   const bool focused = index == selected;
   renderer.drawRoundedRect(x, y, width, height, focused ? FOCUS_FRAME : 1, 10, true);
   const int glyphY = y + (height - GLYPH) / 2;
