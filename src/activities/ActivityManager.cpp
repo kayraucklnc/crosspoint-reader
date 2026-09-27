@@ -21,14 +21,15 @@
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "income/IncomeActivity.h"
-#include "play/PlayMenuActivity.h"
-#include "trains/TrainsActivity.h"
+#include "library/LibraryActivity.h"
 #include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "network/UsbDriveActivity.h"
+#include "play/PlayMenuActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
+#include "trains/TrainsActivity.h"
 #include "util/BmpViewerActivity.h"
 #include "util/FrontlightPanelActivity.h"
 #include "util/FullScreenMessageActivity.h"
@@ -279,9 +280,18 @@ void ActivityManager::goToFileBrowser(std::string path) {
 }
 
 void ActivityManager::goToLibrary() {
-  auto activity = makeUniqueNoThrow<LibraryListActivity>(renderer, mappedInput);
+  auto activity = makeUniqueNoThrow<LibraryActivity>(renderer, mappedInput);
   if (!activity) {
     LOG_ERR("ACT", "OOM: library activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
+void ActivityManager::goToLibraryList() {
+  auto activity = makeUniqueNoThrow<LibraryListActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: library list activity");
     return;
   }
   replaceActivity(std::move(activity));
