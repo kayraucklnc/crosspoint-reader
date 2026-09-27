@@ -5,11 +5,9 @@
 
 // What you scored on each puzzle, one byte apiece.
 //
-// Stored as a flat array indexed by days since the archive's first puzzle, so a
-// lookup is a seek and a one-byte read: no search, no table in RAM, and no
-// dependence on a puzzle's position in the pack (which shifts every time the
-// archive gains entries). Growing a byte a day, it is about 1.2KB today and
-// 1.5KB in 2027.
+// Stored as a flat array indexed by days since the language's launch day (one
+// daily per day), so a lookup is one byte: no search and no dependence on a
+// puzzle's position in the pack. It grows a byte a day.
 //
 // Freestanding: the encoding and the calendar arithmetic live here; the
 // activity supplies the file.
@@ -18,18 +16,12 @@
 
 namespace connections {
 
-// 2023-06-12, the first published puzzle. Fixed forever: it is the origin of
-// every index in the file, so moving it would silently reinterpret every stored
-// result as belonging to a different puzzle.
-constexpr uint32_t kResultsEpoch = 20230612;
-
 struct Record {
   bool played = false;
   bool lost = false;
   // 0-4. Meaningful only when `played`.
   uint8_t mistakes = 0;
-  // The hardest group went first. Only ever set for puzzles whose source
-  // published colour data, which stopped on 2025-09-20; see kLevelUnknown.
+  // The hardest group went first. Only set for puzzles with level data.
   bool hardestFirst = false;
 };
 
@@ -52,10 +44,9 @@ int daysInMonth(int year, int month);
 uint32_t addDays(uint32_t date, int days);
 
 // Everything the menu says about your record, from one pass over the results
-// file. Freestanding because two of its rules are easy to get
-// subtly wrong and impossible to see in a screenshot: the streak counts back
-// from the newest puzzle in the pack rather than from today, and it skips a
-// newest day that is still unplayed (a streak should not read zero at
+// file. Freestanding because one of its rules is easy to get subtly wrong and
+// impossible to see in a screenshot: the streak counts back from today and
+// skips today while it is still unplayed (a streak should not read zero at
 // breakfast). `recent` holds the DayResult codes the menu draws, oldest first.
 struct Summary {
   int played = 0;
@@ -74,12 +65,8 @@ struct Summary {
 enum : uint8_t { kDayUnplayed = 0, kDayWon = 1, kDayPerfect = 2, kDayLost = 3 };
 
 // `results` is the whole file, `count` its length in bytes, `newestIndex` the
-// result index of the newest puzzle held. Out-of-range indices are treated as
-// unplayed rather than read, so a short file is safe.
+// result index of today. Out-of-range indices are treated as unplayed rather
+// than read, so a short file is safe.
 Summary summarise(const uint8_t* results, int count, int newestIndex);
-
-// Index of `date` in the results file, or -1 when it is before the epoch or the
-// date is malformed.
-inline int resultIndex(const uint32_t date) { return daysBetween(kResultsEpoch, date); }
 
 }  // namespace connections

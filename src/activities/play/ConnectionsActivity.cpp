@@ -3,36 +3,42 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
-#include <WiFi.h>
 
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 
-#include "ConnectionsImport.h"
+#include "ConnectionsDaily.h"
 #include "MappedInputManager.h"
-#include "SilentRestart.h"
-#include "WifiCredentialStore.h"
-#include "activities/network/WifiSelectionActivity.h"
-#include "network/HttpDownloader.h"
 #include "network/NetworkTime.h"
-#include "network/WifiAutoConnect.h"
 
 namespace {
 using B = MappedInputManager::Button;
 
 constexpr char DIR[] = "/.crosspoint/games/connections";
-constexpr char INDEX_PATH[] = "/.crosspoint/games/connections/connections.idx";
-constexpr char DATA_PATH[] = "/.crosspoint/games/connections/connections.dat";
-constexpr char INDEX_TMP[] = "/.crosspoint/games/connections/connections.idx.tmp";
-constexpr char DATA_TMP[] = "/.crosspoint/games/connections/connections.dat.tmp";
-constexpr char RESULTS_PATH[] = "/.crosspoint/games/connections/results.bin";
-constexpr char RESULTS_TMP[] = "/.crosspoint/games/connections/results.tmp";
-constexpr char SAVE_PATH[] = "/.crosspoint/games/connections/save.txt";
-constexpr int SAVE_VERSION = 3;
-// The public archive mirror (every puzzle since 2023 in one ~1.4 MB file).
-constexpr char ARCHIVE_URL[] =
-    "https://raw.githubusercontent.com/Eyefyre/NYT-Connections-Answers/main/connections.json";
+constexpr char PREFS_PATH[] = "/.crosspoint/games/connections/prefs.txt";
+constexpr int SAVE_VERSION = 4;
+constexpr int PREFS_VERSION = 1;
+
+// Per language: pack, results, board, launch day (daily #1) and the salt that
+// makes its daily order differ from the other language's.
+struct LangFiles {
+  const char* index;
+  const char* data;
+  const char* results;
+  const char* resultsTmp;
+  const char* save;
+  uint32_t launch;
+  uint32_t salt;
+};
+constexpr LangFiles FILES[] = {
+    {"/.crosspoint/games/connections/connections.idx", "/.crosspoint/games/connections/connections.dat",
+     "/.crosspoint/games/connections/results_en.bin", "/.crosspoint/games/connections/results_en.tmp",
+     "/.crosspoint/games/connections/save_en.txt", 20260101, 0x454E3136u},
+    {"/.crosspoint/games/connections/connections_tr.idx", "/.crosspoint/games/connections/connections_tr.dat",
+     "/.crosspoint/games/connections/results_tr.bin", "/.crosspoint/games/connections/results_tr.tmp",
+     "/.crosspoint/games/connections/save_tr.txt", 20260901, 0x54523236u},
+};
 
 constexpr unsigned long HOLD_MS = 600;
 constexpr unsigned long REPEAT_DELAY_MS = 400;
@@ -44,31 +50,6 @@ bool readAt(void* ctx, const uint32_t offset, void* dst, const uint32_t len) {
   if (!file->seek(offset)) return false;
   return file->read(dst, len) == static_cast<int>(len);
 }
-
-// Import sink: the pack is streamed straight into two files.
-struct Sink {
-  HalFile file;
-  bool failed = false;
-};
-
-bool writeTo(void* ctx, const void* src, const uint32_t len) {
-  auto* sink = static_cast<Sink*>(ctx);
-  if (sink->file.write(src, len) != len) sink->failed = true;
-  return !sink->failed;
-}
-
-struct ImportContext {
-  connections::PackWriter writer;
-  Sink index;
-  Sink data;
-};
-
-bool onImportedPuzzle(void* ctx, const connections::Puzzle& puzzle) {
-  auto* import = static_cast<ImportContext*>(ctx);
-  // A puzzle the writer rejects (out of order) is skipped; only a failed write stops the import.
-  import->writer.add(puzzle);
-  return !import->index.failed && !import->data.failed;
-}
 }  // namespace
 
 // ---- lifecycle ----------------------------------------------------------------
@@ -78,9 +59,8 @@ void ConnectionsActivity::onEnter() {
   rng = static_cast<uint32_t>(millis()) * 2654435761u | 1u;
   results = makeUniqueNoThrow<uint8_t[]>(MAX_RESULTS);
   if (!results) LOG_ERR("CONN", "OOM: results %d bytes", MAX_RESULTS);
-  openPack();
-  loadResults();
-  refreshToday();
+  loadPrefs();
+  openLanguage();
   showScreen(Screen::HOME);
 }
 
@@ -88,33 +68,70 @@ void ConnectionsActivity::onExit() {
   if (gameLoaded) saveGame();
   closePack();
   Activity::onExit();
-  // Like the other WiFi screens, reboot home to reclaim heap the TLS stack fragmented.
-  if (wifiStartedHere) {
-    stopWifi();
-    silentRestart();
+}
+
+// ---- language, pack and results --------------------------------------------------
+
+// "version lang lastSeenDate". A first run follows the UI language.
+void ConnectionsActivity::loadPrefs() {
+  lang = I18N.getLanguage() == Language::TR ? LANG_TR : LANG_EN;
+  char buffer[48] = {};
+  if (!Storage.exists(PREFS_PATH) || Storage.readFileToBuffer(PREFS_PATH, buffer, sizeof(buffer) - 1) == 0) return;
+  int version = 0;
+  unsigned saved = 0;
+  unsigned long seen = 0;
+  if (sscanf(buffer, "%d %u %lu", &version, &saved, &seen) != 3 || version != PREFS_VERSION) return;
+  if (saved < LANG_COUNT) lang = static_cast<Lang>(saved);
+  lastSeenDate = connections::dayOfWeek(static_cast<uint32_t>(seen)) >= 0 ? static_cast<uint32_t>(seen) : 0;
+}
+
+void ConnectionsActivity::savePrefs() const {
+  char line[48];
+  const int length = snprintf(line, sizeof(line), "%d %u %lu", PREFS_VERSION, static_cast<unsigned>(lang),
+                              static_cast<unsigned long>(lastSeenDate));
+  Storage.ensureDirectoryExists(DIR);
+  HalFile file;
+  if (!Storage.openFileForWrite("CONN", PREFS_PATH, file) || file.write(line, length) != static_cast<size_t>(length)) {
+    LOG_ERR("CONN", "Failed to save prefs");
   }
 }
 
-// ---- pack and results -----------------------------------------------------------
+void ConnectionsActivity::switchLanguage(const Lang next) {
+  if (next == lang) return;
+  if (gameLoaded) saveGame();
+  gameLoaded = false;
+  lang = next;
+  savePrefs();
+  openLanguage();
+  cleanNext = true;
+  requestUpdate();
+}
+
+void ConnectionsActivity::openLanguage() {
+  gameLoaded = false;
+  openPack();
+  refreshToday();
+  loadResults();
+  restoreSavedGame();
+  archiveDate = today;
+}
 
 bool ConnectionsActivity::openPack() {
   closePack();
-  if (!Storage.exists(INDEX_PATH) || !Storage.exists(DATA_PATH)) return false;
-  if (!Storage.openFileForRead("CONN", INDEX_PATH, indexFile) ||
-      !Storage.openFileForRead("CONN", DATA_PATH, dataFile)) {
+  const LangFiles& files = FILES[lang];
+  if (!Storage.exists(files.index) || !Storage.exists(files.data)) return false;
+  if (!Storage.openFileForRead("CONN", files.index, indexFile) ||
+      !Storage.openFileForRead("CONN", files.data, dataFile)) {
     closePack();
     return false;
   }
   packOpen = pack.open(readAt, &indexFile, &dataFile, static_cast<uint32_t>(indexFile.fileSize()));
   if (!packOpen) {
-    LOG_ERR("CONN", "Unreadable puzzle pack");
+    LOG_ERR("CONN", "Unreadable puzzle pack %s", files.index);
     closePack();
     return false;
   }
-  pack.dateAt(0, firstDate);
-  pack.dateAt(pack.count() - 1, lastDate);
-  LOG_DBG("CONN", "Pack: %d puzzles %lu..%lu", pack.count(), static_cast<unsigned long>(firstDate),
-          static_cast<unsigned long>(lastDate));
+  LOG_DBG("CONN", "Pack %s: %d puzzles", files.index, pack.count());
   return true;
 }
 
@@ -130,87 +147,105 @@ void ConnectionsActivity::loadResults() {
   if (!results) return;
   std::memset(results.get(), 0, MAX_RESULTS);
   HalFile file;
-  if (Storage.openFileForRead("CONN", RESULTS_PATH, file)) {
+  if (Storage.openFileForRead("CONN", FILES[lang].results, file)) {
     const int read = file.read(results.get(), MAX_RESULTS);
     resultsLength = read > 0 ? read : 0;
   }
-  summary = connections::summarise(results.get(), resultsLength, connections::resultIndex(lastDate));
+  summary = connections::summarise(results.get(), resultsLength, dayIndex(today));
 }
 
 connections::Record ConnectionsActivity::resultFor(const uint32_t date) const {
-  const int index = connections::resultIndex(date);
+  const int index = dayIndex(date);
   if (!results || index < 0 || index >= resultsLength) return {};
   return connections::decodeRecord(results[index]);
 }
 
 // Rewritten whole through a temp file: it is every score kept, and a torn write must not lose it.
 void ConnectionsActivity::writeResult(const uint32_t date, const connections::Record& record) {
-  const int index = connections::resultIndex(date);
+  const int index = dayIndex(date);
   if (!results || index < 0 || index >= MAX_RESULTS) return;
   results[index] = connections::encodeRecord(record);
   if (index >= resultsLength) resultsLength = index + 1;
-  summary = connections::summarise(results.get(), resultsLength, connections::resultIndex(lastDate));
+  summary = connections::summarise(results.get(), resultsLength, dayIndex(today));
 
+  const LangFiles& files = FILES[lang];
   Storage.ensureDirectoryExists(DIR);
   HalFile out;
-  if (!Storage.openFileForWrite("CONN", RESULTS_TMP, out)) return;
+  if (!Storage.openFileForWrite("CONN", files.resultsTmp, out)) return;
   const bool ok = out.write(results.get(), resultsLength) == static_cast<size_t>(resultsLength);
   out.close();
   if (!ok) {
     LOG_ERR("CONN", "Failed to write results");
-    Storage.remove(RESULTS_TMP);
+    Storage.remove(files.resultsTmp);
     return;
   }
-  Storage.remove(RESULTS_PATH);
-  Storage.rename(RESULTS_TMP, RESULTS_PATH);
+  Storage.remove(files.results);
+  Storage.rename(files.resultsTmp, files.results);
 }
 
+// The local date when the clock is known; otherwise the last date seen, so an
+// unset clock keeps showing the latest daily instead of jumping back.
 void ConnectionsActivity::refreshToday() {
   const time_t now = network_time::current();
-  if (now == 0) {
-    today = 0;
-    return;
+  clockKnown = now >= network_time::MIN_VALID_EPOCH;
+  if (clockKnown) {
+    struct tm local{};
+    localtime_r(&now, &local);
+    const auto date = static_cast<uint32_t>((local.tm_year + 1900) * 10000 + (local.tm_mon + 1) * 100 + local.tm_mday);
+    today = date;
+    if (date != lastSeenDate) {
+      lastSeenDate = date;
+      savePrefs();
+    }
+  } else {
+    today = lastSeenDate;
   }
-  struct tm local{};
-  localtime_r(&now, &local);
-  today = static_cast<uint32_t>((local.tm_year + 1900) * 10000 + (local.tm_mon + 1) * 100 + local.tm_mday);
+  if (dayIndex(today) < 0) today = launchDate();
+  if (results) summary = connections::summarise(results.get(), resultsLength, dayIndex(today));
 }
 
-// Today's puzzle, or the newest one held when the pack lags or the clock is unknown.
-int ConnectionsActivity::todayIndex() const {
-  if (!packOpen) return -1;
-  if (today == 0) return pack.count() - 1;
-  const int index = pack.indexOnOrBefore(today);
-  return index >= 0 ? index : pack.count() - 1;
+uint32_t ConnectionsActivity::launchDate() const { return FILES[lang].launch; }
+
+int ConnectionsActivity::dayIndex(const uint32_t date) const {
+  return date == 0 ? -1 : connections::daysBetween(launchDate(), date);
 }
 
+// Past dailies (before today) not played yet: what Random draws from.
 int ConnectionsActivity::unplayedCount() const {
-  if (!packOpen) return 0;
-  const int span = connections::daysBetween(firstDate, lastDate) + 1;
+  const int past = dayIndex(today);
   int played = 0;
-  const int first = connections::resultIndex(firstDate);
-  for (int i = 0; i < span && first + i < resultsLength; i++) {
-    if (connections::decodeRecord(results[first + i]).played) played++;
+  for (int i = 0; i < past && i < resultsLength; i++) {
+    if (connections::decodeRecord(results[i]).played) played++;
   }
-  return pack.count() > played ? pack.count() - played : 0;
+  return past > played ? past - played : 0;
 }
 
 // ---- game -----------------------------------------------------------------------
 
-bool ConnectionsActivity::openPuzzle(const int index) {
-  connections::Puzzle puzzle;
-  if (!packOpen || !pack.readPuzzle(index, puzzle)) {
+// The daily of `date`, stamped with that date: results, the save and the
+// header all key on it.
+bool ConnectionsActivity::readDaily(const uint32_t date, connections::Puzzle& out) const {
+  const int day = dayIndex(date);
+  if (!packOpen || day < 0) return false;
+  const int index = connections::dailyPuzzle(static_cast<uint32_t>(day), pack.count(), FILES[lang].salt);
+  if (!pack.readPuzzle(index, out) || !connections::isPlayable(out)) {
     LOG_ERR("CONN", "Could not read puzzle %d", index);
     return false;
   }
-  const bool onRecord = resultFor(puzzle.date).played;
+  out.date = date;
+  return true;
+}
+
+bool ConnectionsActivity::openDaily(const uint32_t date) {
+  connections::Puzzle puzzle;
+  if (!readDaily(date, puzzle)) return false;
   if (!loadGame(puzzle)) {
-    // Seeded from the id, so a puzzle always deals the same board.
+    // Seeded from the puzzle, so a puzzle always deals the same board.
     game.start(puzzle, 0x9E3779B9u ^ (static_cast<uint32_t>(puzzle.id) * 2654435761u));
   }
   gameLoaded = true;
-  recorded = onRecord;
-  replay = onRecord && game.result() == connections::Result::Playing && game.mistakes() == 0 && game.solvedCount() == 0;
+  recorded = resultFor(date).played;
+  replay = recorded && game.result() == connections::Result::Playing;
   cursorRow = 0;
   cursorCol = 0;
   toast = Toast::NONE;
@@ -220,36 +255,54 @@ bool ConnectionsActivity::openPuzzle(const int index) {
   return true;
 }
 
+// Brings back the language's last board so the home can show its progress.
+void ConnectionsActivity::restoreSavedGame() {
+  char buffer[24] = {};
+  const char* path = FILES[lang].save;
+  if (!Storage.exists(path) || Storage.readFileToBuffer(path, buffer, sizeof(buffer) - 1) == 0) return;
+  int version = 0;
+  unsigned long date = 0;
+  if (sscanf(buffer, "%d %lu", &version, &date) != 2 || version != SAVE_VERSION) return;
+  const int day = dayIndex(static_cast<uint32_t>(date));
+  if (day < 0 || day > dayIndex(today)) return;
+  connections::Puzzle puzzle;
+  if (!readDaily(static_cast<uint32_t>(date), puzzle) || !loadGame(puzzle)) return;
+  gameLoaded = true;
+  recorded = resultFor(puzzle.date).played;
+  replay = recorded && game.result() == connections::Result::Playing;
+}
+
 void ConnectionsActivity::saveGame() const {
   if (!gameLoaded) return;
   const connections::Game::Save state = game.save();
   char line[160];
-  int at = snprintf(line, sizeof(line), "%d %lu %lu %u %u %u %u %u %u %u", SAVE_VERSION,
-                    static_cast<unsigned long>(game.puzzle().date), static_cast<unsigned long>(state.seed),
-                    state.solvedCount, state.mistakes, state.solvedOrder[0], state.solvedOrder[1], state.solvedOrder[2],
-                    state.solvedOrder[3], state.guessCount);
+  int at = snprintf(line, sizeof(line), "%d %lu %u %lu %u %u %u %u %u %u %u", SAVE_VERSION,
+                    static_cast<unsigned long>(game.puzzle().date), game.puzzle().id,
+                    static_cast<unsigned long>(state.seed), state.solvedCount, state.mistakes, state.solvedOrder[0],
+                    state.solvedOrder[1], state.solvedOrder[2], state.solvedOrder[3], state.guessCount);
   for (int i = 0; i < state.guessCount && at > 0 && at < static_cast<int>(sizeof(line)) - 8; i++) {
     at += snprintf(line + at, sizeof(line) - at, " %u", state.guessed[i]);
   }
   Storage.ensureDirectoryExists(DIR);
   HalFile file;
-  if (!Storage.openFileForWrite("CONN", SAVE_PATH, file) || file.write(line, at) != static_cast<size_t>(at)) {
+  if (!Storage.openFileForWrite("CONN", FILES[lang].save, file) || file.write(line, at) != static_cast<size_t>(at)) {
     LOG_ERR("CONN", "Failed to save the board");
   }
 }
 
-// Restores the saved board when it belongs to `puzzle`.
+// Restores the saved board when it belongs to `puzzle` (same day, same pack puzzle).
 bool ConnectionsActivity::loadGame(const connections::Puzzle& puzzle) {
   char buffer[160] = {};
-  if (!Storage.exists(SAVE_PATH) || Storage.readFileToBuffer(SAVE_PATH, buffer, sizeof(buffer) - 1) == 0) return false;
+  const char* path = FILES[lang].save;
+  if (!Storage.exists(path) || Storage.readFileToBuffer(path, buffer, sizeof(buffer) - 1) == 0) return false;
   int version = 0, consumed = 0;
   unsigned long date = 0, seed = 0;
-  unsigned solved = 0, mistakes = 0, order[4] = {}, guesses = 0;
-  if (sscanf(buffer, "%d %lu %lu %u %u %u %u %u %u %u%n", &version, &date, &seed, &solved, &mistakes, &order[0],
-             &order[1], &order[2], &order[3], &guesses, &consumed) != 10) {
+  unsigned id = 0, solved = 0, mistakes = 0, order[4] = {}, guesses = 0;
+  if (sscanf(buffer, "%d %lu %u %lu %u %u %u %u %u %u %u%n", &version, &date, &id, &seed, &solved, &mistakes, &order[0],
+             &order[1], &order[2], &order[3], &guesses, &consumed) != 11) {
     return false;
   }
-  if (version != SAVE_VERSION || date != puzzle.date) return false;
+  if (version != SAVE_VERSION || date != puzzle.date || id != puzzle.id) return false;
   connections::Game::Save state;
   state.seed = static_cast<uint32_t>(seed);
   state.solvedCount = static_cast<uint8_t>(solved);
@@ -380,124 +433,6 @@ void ConnectionsActivity::moveCursor(const int dCol, const int dRow) {
   requestUpdate();
 }
 
-// ---- update from the archive ------------------------------------------------------
-
-void ConnectionsActivity::startUpdate() {
-  updateError = "";
-  updateAccepted = 0;
-  screen = Screen::UPDATE;
-  if (WiFi.status() == WL_CONNECTED) {
-    updateStep = UpdateStep::DOWNLOAD;
-  } else {
-    updateStep = UpdateStep::CONNECT;
-    wifiStartedHere = true;
-  }
-  cleanNext = true;
-  requestUpdate();
-}
-
-void ConnectionsActivity::stopWifi() {
-  if (WiFi.getMode() == WIFI_MODE_NULL) return;
-  WiFi.disconnect(false);
-  delay(30);
-  WiFi.mode(WIFI_OFF);
-}
-
-void ConnectionsActivity::runConnect() {
-  {
-    RenderLock lock(*this);  // SD shares the SPI bus with the display
-    WIFI_STORE.loadFromFile();
-  }
-  if (wifi_auto_connect::connect() == wifi_auto_connect::Result::CONNECTED) {
-    updateStep = UpdateStep::DOWNLOAD;
-    requestUpdate();
-    return;
-  }
-  updateStep = UpdateStep::PICKING;
-  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false),
-                         [this](const ActivityResult& result) {
-                           cleanNext = true;
-                           if (result.isCancelled) {
-                             updateStep = UpdateStep::FAILED;
-                             updateError = tr(STR_CONN_ERR_WIFI);
-                           } else {
-                             updateStep = UpdateStep::DOWNLOAD;
-                           }
-                         });
-}
-
-// Streams the archive straight into a new pack (peak memory is one puzzle),
-// written beside the old one and swapped in only once complete.
-void ConnectionsActivity::runDownload() {
-  time_t now = 0;
-  network_time::ensure(now);  // the update is also a chance to set the clock for "today"
-  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
-      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
-    updateStep = UpdateStep::FAILED;
-    updateError = tr(STR_CONN_ERR_MEMORY);
-    requestUpdate();
-    return;
-  }
-  auto import = makeUniqueNoThrow<ImportContext>();
-  auto importer = makeUniqueNoThrow<connections::Importer>();
-  if (!import || !importer) {
-    LOG_ERR("CONN", "OOM: importer");
-    updateStep = UpdateStep::FAILED;
-    updateError = tr(STR_CONN_ERR_MEMORY);
-    requestUpdate();
-    return;
-  }
-
-  bool fetched = false, parsed = false;
-  {
-    RenderLock lock(*this);
-    closePack();
-    Storage.ensureDirectoryExists(DIR);
-    Storage.remove(INDEX_TMP);
-    Storage.remove(DATA_TMP);
-    const bool opened = Storage.openFileForWrite("CONN", INDEX_TMP, import->index.file) &&
-                        Storage.openFileForWrite("CONN", DATA_TMP, import->data.file) &&
-                        import->writer.begin(writeTo, &import->index, &import->data);
-    lock.unlock();
-    if (opened) {
-      importer->begin(onImportedPuzzle, import.get());
-      fetched = HttpDownloader::fetchUrl(
-          ARCHIVE_URL, [&importer](const uint8_t* data, const size_t len) { return importer->feed(data, len); });
-      parsed = importer->finish();
-    } else {
-      import->index.failed = true;
-    }
-  }
-  import->index.file.close();
-  import->data.file.close();
-  const bool writeFailed = import->index.failed || import->data.failed;
-  const int written = import->writer.written();
-  LOG_INF("CONN", "Import: fetched=%d parsed=%d written=%d skipped=%d/%d", fetched, parsed, written,
-          importer->stats().skippedUnrenderable, importer->stats().skippedMalformed);
-  if (wifiStartedHere) stopWifi();
-
-  {
-    RenderLock lock(*this);
-    if (!fetched || !parsed || writeFailed || written == 0) {
-      Storage.remove(INDEX_TMP);
-      Storage.remove(DATA_TMP);
-      updateStep = UpdateStep::FAILED;
-      updateError = writeFailed ? tr(STR_CONN_ERR_CARD) : tr(STR_CONN_ERR_DOWNLOAD);
-    } else {
-      Storage.remove(INDEX_PATH);
-      Storage.remove(DATA_PATH);
-      const bool swapped = Storage.rename(INDEX_TMP, INDEX_PATH) && Storage.rename(DATA_TMP, DATA_PATH);
-      updateStep = swapped ? UpdateStep::DONE : UpdateStep::FAILED;
-      updateError = swapped ? "" : tr(STR_CONN_ERR_CARD);
-      updateAccepted = written;
-    }
-    openPack();
-    summary = connections::summarise(results.get(), resultsLength, connections::resultIndex(lastDate));
-    refreshToday();
-  }
-  requestUpdate();
-}
-
 // ---- navigation -------------------------------------------------------------------
 
 void ConnectionsActivity::showScreen(const Screen next) {
@@ -506,28 +441,32 @@ void ConnectionsActivity::showScreen(const Screen next) {
   requestUpdate();
 }
 
+// A random past daily not played yet; a random past one to replay when all
+// are done; today's when there is no past yet.
 void ConnectionsActivity::openRandom() {
-  if (!packOpen) return;
-  const int count = pack.count();
-  const int start = static_cast<int>(rng % static_cast<uint32_t>(count));
+  const int past = dayIndex(today);
+  if (past <= 0) {
+    openDaily(today);
+    return;
+  }
+  const int start = static_cast<int>(rng % static_cast<uint32_t>(past));
   rng = rng * 1664525u + 1013904223u;
-  for (int step = 0; step < count; step++) {
-    const int index = (start + step) % count;
-    uint32_t date = 0;
-    if (pack.dateAt(index, date) && !resultFor(date).played) {
-      openPuzzle(index);
+  for (int step = 0; step < past; step++) {
+    const int day = (start + step) % past;
+    if (day >= resultsLength || !connections::decodeRecord(results[day]).played) {
+      openDaily(connections::addDays(launchDate(), day));
       return;
     }
   }
-  openPuzzle(start);
+  openDaily(connections::addDays(launchDate(), start));
 }
 
 void ConnectionsActivity::openHomeItem() {
-  refreshToday();
-  if (homeSelected == HOME_UPDATE) {
-    startUpdate();
+  if (homeSelected == HOME_LANG) {
+    switchLanguage(lang == LANG_EN ? LANG_TR : LANG_EN);
     return;
   }
+  refreshToday();
   if (homeSelected == HOME_STATS) {
     showScreen(Screen::STATS);
     return;
@@ -538,15 +477,14 @@ void ConnectionsActivity::openHomeItem() {
   }
   switch (homeSelected) {
     case HOME_TODAY:
-      openPuzzle(todayIndex());
+      openDaily(today);
       break;
     case HOME_RANDOM:
       openRandom();
       break;
     default: {
-      uint32_t date = lastDate;
-      pack.dateAt(todayIndex(), date);
-      archiveDate = gameLoaded && game.puzzle().date >= firstDate ? game.puzzle().date : date;
+      const uint32_t current = gameLoaded ? game.puzzle().date : 0;
+      archiveDate = dayIndex(current) >= 0 && current <= today ? current : today;
       showScreen(Screen::ARCHIVE);
       break;
     }
@@ -621,8 +559,7 @@ void ConnectionsActivity::handleArchive() {
     return;
   }
   if (mappedInput.wasReleased(B::Confirm)) {
-    const int index = pack.indexOfDate(archiveDate);
-    if (index >= 0) openPuzzle(index);
+    openDaily(archiveDate);
     return;
   }
   int delta = 0;
@@ -633,7 +570,8 @@ void ConnectionsActivity::handleArchive() {
   if (delta == 0) return;
   const uint32_t next = connections::addDays(archiveDate, delta);
   if (next == 0) return;
-  const uint32_t clamped = next < firstDate ? firstDate : next > lastDate ? lastDate : next;
+  const uint32_t first = launchDate();
+  const uint32_t clamped = next < first ? first : next > today ? today : next;
   if (clamped == archiveDate) return;
   // A month change redraws most of the screen: clean it.
   if (clamped / 100 != archiveDate / 100) cleanNext = true;
@@ -645,26 +583,7 @@ void ConnectionsActivity::handleStats() {
   if (mappedInput.wasReleased(B::Back) || mappedInput.wasReleased(B::Confirm)) showScreen(Screen::HOME);
 }
 
-void ConnectionsActivity::handleUpdate() {
-  // Each step shows its status before blocking on the network.
-  if (updateStep == UpdateStep::CONNECT) {
-    requestUpdateAndWait();
-    runConnect();
-    return;
-  }
-  if (updateStep == UpdateStep::DOWNLOAD) {
-    requestUpdateAndWait();
-    runDownload();
-    return;
-  }
-}
-
 void ConnectionsActivity::loop() {
-  // Network steps block without the render lock; their status frame is drawn first.
-  if (screen == Screen::UPDATE && updateStep <= UpdateStep::PICKING) {
-    handleUpdate();
-    return;
-  }
   RenderLock lock(*this);
   if (screen == Screen::HOME && mappedInput.wasReleased(B::Back)) {
     lock.unlock();
@@ -686,9 +605,6 @@ void ConnectionsActivity::loop() {
       break;
     case Screen::STATS:
       handleStats();
-      break;
-    case Screen::UPDATE:
-      if (mappedInput.wasReleased(B::Back) || mappedInput.wasReleased(B::Confirm)) showScreen(Screen::HOME);
       break;
   }
 }

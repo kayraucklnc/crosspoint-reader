@@ -3,18 +3,19 @@
 
 Source: the community archive of NYT Connections answers at SOURCE_URL
 (Eyefyre/NYT-Connections-Answers). The puzzles are the New York Times'; the
-pack is built for personal use and is NOT committed. The device can refresh the
-same pack itself from the same URL (Connections > Update puzzles), so this
-script only seeds a card:
+pack is built for personal use and is NOT committed. The device is offline: it
+deals its own English daily from this pack (a shuffled pass, see
+src/activities/play/ConnectionsDaily.h), and rerunning this script is how the
+pack is refreshed. A pack with a different puzzle count deals a different
+daily order (saved results stay keyed by date).
 
     python3 scripts/gen_connections.py OUT_DIR [OUT_DIR ...] [--source FILE]
 
 e.g. OUT_DIR = fs_/.crosspoint/games/connections (simulator) or
 <sd-extra>/.crosspoint/games/connections.
 
-Output: connections.idx, connections.dat and NOTICE.txt, byte-identical to what
-the on-device importer (src/activities/play/ConnectionsImport.cpp +
-ConnectionsPack.cpp) writes from the same JSON:
+Output: connections.idx, connections.dat and NOTICE.txt, read by
+src/activities/play/ConnectionsPack.cpp:
 
   connections.idx  u32 magic "CXP1", u16 version 1, u16 0, then per puzzle
                    u32 date (YYYYMMDD), u32 offset into connections.dat,
@@ -23,8 +24,7 @@ ConnectionsPack.cpp) writes from the same JSON:
                    u8 level (0-3, 0xFF unknown), u8 len + name,
                    4 x (u8 len + word). Text is folded to ASCII.
 
-Puzzles holding characters with no ASCII form (emoji) are skipped, like the
-device does.
+Puzzles holding characters with no ASCII form (emoji) are skipped.
 """
 
 import argparse

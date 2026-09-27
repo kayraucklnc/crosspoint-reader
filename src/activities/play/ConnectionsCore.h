@@ -22,17 +22,16 @@ constexpr int kMembers = 4;
 constexpr int kTiles = kGroups * kMembers;
 constexpr int kMaxMistakes = 4;
 
-// Sized from the whole published archive (1143 puzzles, 18288 words): the
-// longest word is 28 characters and the longest group name is 71. Fixed buffers
+// In bytes of UTF-8. Sized from the English archive (longest word 28
+// characters, longest group name 71); the Turkish generator enforces the same
+// limits. Fixed buffers
 // rather than std::string keeps a Puzzle a plain value with no allocation,
 // which is what lets it live on the stack of a 380KB device.
 constexpr int kMaxWordLen = 32;
 constexpr int kMaxGroupLen = 80;
 
-// The source stopped publishing colour data on 2025-09-20: 831 puzzles have
-// real levels, the 312 since do not, and it is a clean cutoff rather than
-// scattered gaps. So anything keyed on difficulty works for the back catalogue
-// and not for today's puzzle, which is the one most people play.
+// The English archive stopped publishing colour data on 2025-09-20, so its
+// newer puzzles carry no levels. The Turkish pack always has them.
 constexpr uint8_t kLevelUnknown = 0xFF;
 
 struct Group {
@@ -165,8 +164,8 @@ class Game {
 };
 
 // True when every group has four members, no word is empty, and no word is
-// repeated. Import validates with this so a malformed puzzle never reaches the
-// board, where the failure would be a stuck game rather than a skipped one.
+// repeated. Checked on every puzzle read from the card so a malformed one never
+// reaches the board, where the failure would be a stuck game.
 bool isPlayable(const Puzzle& puzzle);
 
 }  // namespace connections
