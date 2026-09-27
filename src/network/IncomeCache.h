@@ -13,14 +13,17 @@ struct IncomeCache {
 
   int monthKey = 0;  // YYYYMM
   uint8_t amountMode = 0;
-  int64_t closedCents[MAX_DAYS + 1] = {};  // indexed by day of month
-  uint32_t closedKnown = 0;                // bit n set = closedCents[n] is final
-  IncomeSummary lastSummary;               // what was last shown, for instant display
+  int64_t closedCents[MAX_DAYS + 1] = {};    // indexed by day of month
+  uint16_t closedNonUsd[MAX_DAYS + 1] = {};  // uncounted non-USD charges, same days
+  uint32_t closedKnown = 0;                  // bit n set = closedCents[n] is final
+  IncomeSummary lastSummary;                 // what was last shown, for instant display
   bool hasSummary = false;
+  time_t balanceDeniedAt = 0;  // when the key was last found without Balance read (0 = it has it)
 
   bool isKnown(const int day) const { return (closedKnown >> day) & 1u; }
-  void setClosed(const int day, const int64_t cents) {
+  void setClosed(const int day, const int64_t cents, const uint16_t nonUsd) {
     closedCents[day] = cents;
+    closedNonUsd[day] = nonUsd;
     closedKnown |= 1u << day;
   }
 

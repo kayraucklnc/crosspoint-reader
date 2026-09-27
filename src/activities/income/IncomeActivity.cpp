@@ -14,12 +14,12 @@
 #include "IncomeGraphics.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
-#include "activities/network/WifiSelectionActivity.h"
 #include "WifiCredentialStore.h"
-#include "network/WifiAutoConnect.h"
+#include "activities/network/WifiSelectionActivity.h"
 #include "components/SleepSnapshot.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WifiAutoConnect.h"
 
 namespace {
 constexpr int MARGIN = 28;
@@ -242,7 +242,8 @@ int IncomeActivity::renderHero(const int x, const int y, const int width, const 
   }
 
   // Landscape: month total right-aligned beside the hero. Portrait: stacked below it.
-  const int monthLabelWidth = income_gfx::trackedLabelWidth(renderer, UI_10_FONT_ID, tr(STR_INCOME_THIS_MONTH), TRACKING);
+  const int monthLabelWidth =
+      income_gfx::trackedLabelWidth(renderer, UI_10_FONT_ID, tr(STR_INCOME_THIS_MONTH), TRACKING);
   const int monthWidth = renderer.getTextWidth(NOTOSANS_18_FONT_ID, month, EpdFontFamily::BOLD);
   const int rightEdge = x + width;
   const int blockY = landscape ? y : todayBottom + 12;
@@ -293,9 +294,15 @@ int IncomeActivity::renderStatus(const int x, const int y, const int width, cons
   strftime(clock, sizeof(clock), "%H:%M", &local);
   snprintf(updated, sizeof(updated), "%s %s", tr(STR_INCOME_UPDATED), clock);
   drawLine(updated, y);
-  return y + lineHeight;
+  if (summary.nonUsdCharges <= 0) return y + lineHeight;
+  // The key could not read balance transactions, so charges in other currencies are missing.
+  char note[96];
+  snprintf(note, sizeof(note), tr(STR_INCOME_NON_USD_SKIPPED), summary.nonUsdCharges);
+  char lines[2][96];
+  const int count = income_gfx::wrapText(renderer, SMALL_FONT_ID, note, width, lines, 2);
+  for (int i = 0; i < count; i++) drawLine(lines[i], y + (i + 1) * lineHeight);
+  return y + (count + 1) * lineHeight;
 }
-
 
 void IncomeActivity::renderChart(const int x, const int y, const int width, const int height) const {
   if (!hasSummary) {

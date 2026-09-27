@@ -5,8 +5,8 @@
 #include "activities/Activity.h"
 #include "network/StripeClient.h"
 
-// Stripe income dashboard: today's gross USD charges as a hero number plus a
-// dithered, smoothed five-day line chart. Refreshes in place: joins a saved WiFi
+// Stripe income dashboard: today's income in whole US dollars as a hero number
+// plus a dithered, smoothed five-day line chart. Refreshes in place: joins a saved WiFi
 // network silently, fetches, then drops WiFi. Confirm refreshes, Back exits.
 class IncomeActivity final : public Activity {
  public:
