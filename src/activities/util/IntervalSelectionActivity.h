@@ -23,6 +23,12 @@ class IntervalSelectionActivity final : public Activity, private UiAppHost {
   void render(RenderLock&&) override;
   bool isReaderActivity() const override { return readerActivity; }
 
+  // Custom readout and endpoint text (choice lists, clock times) with caller
+  // hint lines in place of the numeric format and step hints. Call before the
+  // activity starts; the hints are copied.
+  using ValueFormatter = void (*)(int value, char* out, size_t size);
+  void setFormatter(ValueFormatter valueFormatter, const char* hint1, const char* hint2);
+
  private:
   // The UiAppHost app hosts the shared slider dialog popup (capsule slider,
   // [-] [+] [Confirm] buttons) drawn over the screen underneath.
@@ -42,6 +48,8 @@ class IntervalSelectionActivity final : public Activity, private UiAppHost {
   int largeStep;
   bool readerActivity;
   ButtonNavigator buttonNavigator;
+  ValueFormatter formatter = nullptr;
+  char customHints[2][64] = {};
 
   // Swallow the swipe/tap fallout of a slider drag so its release can't trigger
   // the back gesture and cancel the dialog.

@@ -6,17 +6,28 @@
 #include <esp_sntp.h>
 #include <sys/time.h>
 
-#include "HttpDownloader.h"
-
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+#include "HttpDownloader.h"
 
 namespace network_time {
 namespace {
 bool systemClockTrusted = false;  // set from NTP or the RTC during this boot
 bool synced = false;              // NTP or HTTP Date succeeded this boot
-time_t lastSync = 0;
+}  // namespace
+
+// Last successful network sync. Kept in RTC memory through deep sleep, so the
+// auto-refresh timer wakes only resync every RESYNC_SECONDS (the RTC holds the
+// time in between) instead of paying for NTP on every wake.
+#ifdef SIMULATOR
+static time_t lastSync = 0;
+#else
+static RTC_DATA_ATTR time_t lastSync = 0;
+#endif
+
+namespace {
 
 time_t systemTime() {
 #ifdef SIMULATOR

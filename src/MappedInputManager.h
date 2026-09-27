@@ -117,6 +117,10 @@ class MappedInputManager {
   // using the same live-orientation transform as ScreenLeft/Right/Up/Down.
   Labels mapDirectionalLabels(const char* back, const char* confirm, const char* left, const char* right,
                               const char* up, const char* down) const;
+  // Labels for logical Back/Confirm/Left/Right placed over whichever physical
+  // buttons carry those roles, without the direction swap mapLabels applies.
+  // For Left/Right used as plain actions rather than directions.
+  Labels mapFrontLabels(const char* back, const char* confirm, const char* left, const char* right) const;
   // Returns the raw front button index that was pressed this frame (or -1 if none).
   int getPressedFrontButton() const;
 
@@ -134,7 +138,6 @@ class MappedInputManager {
   const GfxRenderer& renderer;
 
   Button mapScreenDirection(Button button) const;
-  Labels mapFrontLabels(const char* back, const char* confirm, const char* left, const char* right) const;
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;
   // SDK edge classification (fui::edgeSwipe) + the shared decode/held-time
   // bookkeeping; the wrappers below give each edge its board meaning.

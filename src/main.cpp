@@ -35,6 +35,7 @@
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
+#include "autorefresh/AutoRefresh.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "platform/UsbSerialJtagHandoff.h"
@@ -69,6 +70,13 @@ constexpr unsigned long X4PRO_POWER_CLICK_MAX_HOLD_MS = 300;
 // A wake hold must never become an in-app power-button action.  Boot may continue
 // while the button is held; swallow the one release that ends that wake gesture.
 static bool wakePowerReleasePending = false;
+
+// A deep-sleep timer wake refreshing the sleep snapshot (autorefresh/AutoRefresh.h)
+// runs the dashboard headless until its fetch settles, then sleeps again.
+static bool autoRefreshRun = false;
+static bool autoRefreshRenderOnly = false;  // battery too low: only redraw the badge
+static unsigned long autoRefreshStartMs = 0;
+constexpr unsigned long AUTO_REFRESH_BUDGET_MS = 45000;  // hard cap on one unattended wake
 
 // Fonts
 EpdFont notoserif14RegularFont(&notoserif_14_regular);
@@ -153,6 +161,7 @@ enum class BootResume : uint8_t {
   Splash,          // cold boot, flash, panic, or plain reboot
   Silent,          // heap-defrag ESP.restart() (RTC flag; lost on power loss)
   SplashlessWake,  // wake from deep sleep with the splash suppressed by the SD flag
+  TimerRefresh,    // deep-sleep timer wake: refresh the snapshot still on the panel, no UI
 };
 
 // Latched true once enterDeepSleep() commits to sleeping, before it tears down
@@ -260,12 +269,15 @@ static bool loadSleepFrameBuffer() {
   return true;
 }
 
-// Enter deep sleep mode
-void enterDeepSleep(bool fromTimeout = false) {
+// Enter deep sleep mode. timerRun: the sleep that ends a timer-wake snapshot refresh.
+void enterDeepSleep(bool fromTimeout = false, bool timerRun = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
   APP_STATE.lastSleepApp = activityManager.sleepSnapshotApp();
+  APP_STATE.lastSleepRoute = activityManager.sleepSnapshotRoute();
   const bool keepSnapshot = APP_STATE.lastSleepApp != CrossPointState::SLEEP_APP_NONE;
+  // Before the snapshot is drawn: its badge names the next wake.
+  auto_refresh::planSleep(APP_STATE.lastSleepApp, timerRun);
 
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -301,7 +313,66 @@ void enterDeepSleep(bool fromTimeout = false) {
   Storage.prepareForDeepSleep();
   LOG_DBG("MAIN", "Entering deep sleep");
 
+  auto_refresh::armPlannedWake();
+#ifdef SIMULATOR
+  auto_refresh::simulateTimerWake();
+#endif
   powerManager.startDeepSleep(gpio);
+}
+
+// Back to deep sleep straight from setup(), before the display was touched: the
+// panel keeps its frame. Keeps an auto-refresh plan alive across the wake.
+static void returnToSleepFromBoot() {
+  auto_refresh::armRemainingWake();
+  Storage.prepareForDeepSleep();
+#ifdef SIMULATOR
+  auto_refresh::simulateTimerWake();
+#endif
+  powerManager.startDeepSleep(gpio);
+}
+
+// Timer wake: open the dashboard that is asleep on the panel, headless.
+static void startAutoRefreshRun() {
+  autoRefreshRenderOnly = auto_refresh::batteryTooLow();
+  const BackgroundMode mode = autoRefreshRenderOnly ? BackgroundMode::RenderOnly : BackgroundMode::Refresh;
+  if (APP_STATE.lastSleepApp == CrossPointState::SLEEP_APP_INCOME) {
+    activityManager.goToIncome(mode);
+  } else {
+    activityManager.goToTrains(mode, APP_STATE.lastSleepRoute);
+  }
+  autoRefreshRun = true;
+  autoRefreshStartMs = millis();
+  LOG_INF("AUTO", "Timer wake: refreshing %s%s",
+          APP_STATE.lastSleepApp == CrossPointState::SLEEP_APP_INCOME ? "Income" : "Trains",
+          autoRefreshRenderOnly ? " (battery low, redraw only)" : "");
+}
+
+// One main-loop pass of a timer-wake refresh.
+static void autoRefreshStep() {
+  const bool pressedBefore = gpio.wasAnyPressed();
+  activityManager.loop();
+  // A press means someone is at the device: hand the page over live, exactly
+  // like a power-button wake. Network steps block, so also sample after the
+  // step: a button held through it must not be answered by going to sleep.
+  gpio.update();
+  if (pressedBefore || gpio.wasAnyPressed() || gpio.rawInputActive()) {
+    LOG_INF("AUTO", "Button pressed during timer refresh: waking up");
+    autoRefreshRun = false;
+    wakePowerReleasePending = true;  // clears itself on the first frame without power held
+    allowSleepAt = millis() + 2000;
+    activityManager.leaveBackgroundRefresh();
+    return;
+  }
+  const BackgroundRefresh state = activityManager.backgroundRefreshState();
+  const unsigned long elapsed = millis() - autoRefreshStartMs;
+  const bool settled = state == BackgroundRefresh::Succeeded || state == BackgroundRefresh::Failed;
+  if (!settled && elapsed < AUTO_REFRESH_BUDGET_MS) {
+    delay(5);
+    return;
+  }
+  if (!autoRefreshRenderOnly) auto_refresh::recordOutcome(state == BackgroundRefresh::Succeeded);
+  LOG_INF("AUTO", "Timer refresh settled after %lu ms", elapsed);
+  enterDeepSleep(false, true);
 }
 
 void setupDisplayAndFonts(bool seamless = false) {
@@ -383,7 +454,15 @@ void setup() {
   gpio.begin();
   powerManager.begin();
 
-  const auto wakeupReason = gpio.getWakeupReason();
+  const auto rawWakeupReason = gpio.getWakeupReason();
+  // A deep-sleep timer wake refreshes the sleep snapshot unattended, unless a
+  // button is already down: then the user is waking the device, like a power wake.
+  const bool timerWake = auto_refresh::wokeFromTimer();
+  if (timerWake) gpio.update();
+  const bool timerWakeByUser = timerWake && gpio.rawInputActive();
+  const bool autoRefreshBoot = timerWake && !timerWakeByUser;
+  // The simulator relaunches every wake as a power wake; a timer wake is not one.
+  const auto wakeupReason = timerWake ? HalGPIO::WakeupReason::Other : rawWakeupReason;
   // Sample the wake hold now — a click wake is released within milliseconds of
   // boot — but defer the sleep-or-boot decision until SETTINGS is loaded below:
   // click-to-wake is a setting, and an X4 battery power-off cuts all power, so
@@ -418,7 +497,7 @@ void setup() {
   HalSystem::checkPanic();
 
   APP_STATE.loadFromFile();
-  const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
+  const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton || timerWakeByUser;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
 
   if (recoveryFirmwareMode) {
@@ -451,7 +530,8 @@ void setup() {
   // reboots replay the live state captured at restart, so they neither go dark
   // nor light up against the user's wake preference.
   const bool restoreLightOn =
-      isSilentReboot ? silentRebootLightOn : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
+      isSilentReboot ? silentRebootLightOn
+                     : (!autoRefreshBoot && SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn);
 
   switch (wakeupReason) {
@@ -460,8 +540,7 @@ void setup() {
       // device; otherwise the button must still be held (ghost-wake debounce).
       if (!wakeHoldVerified && SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::SLEEP) {
         LOG_DBG("MAIN", "Power-button wake not held through verification, sleeping");
-        Storage.prepareForDeepSleep();
-        powerManager.startDeepSleep(gpio);
+        returnToSleepFromBoot();
       }
       wakePowerReleasePending = true;
       break;
@@ -477,8 +556,7 @@ void setup() {
       // the device in a USB-replug boot loop (or sleep right after a flash).
       break;
 #else
-      Storage.prepareForDeepSleep();
-      powerManager.startDeepSleep(gpio);
+      returnToSleepFromBoot();
       break;
 #endif
     case HalGPIO::WakeupReason::AfterFlash:
@@ -486,6 +564,18 @@ void setup() {
     case HalGPIO::WakeupReason::Other:
     default:
       break;
+  }
+
+  if (timerWakeByUser) wakePowerReleasePending = true;
+  if (autoRefreshBoot) {
+    // The timer runs from the RC oscillator and can fire early; the RTC decides.
+    const long early = auto_refresh::secondsEarly();
+    if (!APP_STATE.autoRefreshArmed || APP_STATE.lastSleepApp == CrossPointState::SLEEP_APP_NONE || early > 0) {
+      LOG_INF("AUTO", "Timer wake %s, back to sleep", early > 0 ? "early" : "without a plan");
+      halTiltSensor.deepSleep();
+      returnToSleepFromBoot();
+      return;  // simulator only: its sleep returns when the window closes
+    }
   }
 
   LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
@@ -496,7 +586,8 @@ void setup() {
   // retained frame and input dispatches against a visible UI.
   // Only a verified deep-sleep wake may use the one-shot persisted flag.
   // Otherwise a stale flag could suppress the splash on a cold boot.
-  const BootResume resume = isSilentReboot         ? BootResume::Silent
+  const BootResume resume = autoRefreshBoot        ? BootResume::TimerRefresh
+                            : isSilentReboot       ? BootResume::Silent
                             : isPersistedSleepWake ? BootResume::SplashlessWake
                                                    : BootResume::Splash;
   bool allowFastInitialReaderRefresh = false;
@@ -527,6 +618,10 @@ void setup() {
         needsWakeRefresh = true;
       }
       break;
+    case BootResume::TimerRefresh:
+      // The old snapshot stays on the panel until the refreshed one replaces
+      // it with a single HALF refresh on the way back to sleep.
+      break;
     case BootResume::Splash:
       activityManager.goToBoot();
       break;
@@ -535,7 +630,9 @@ void setup() {
   // Output polarity is resolved per render by ActivityManager (night mode
   // inverts only the reading surfaces), so nothing to restore here.
 
-  if (recoveryFirmwareMode) {
+  if (resume == BootResume::TimerRefresh) {
+    startAutoRefreshRun();
+  } else if (recoveryFirmwareMode) {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
     activityManager.replaceActivity(
         std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInputManager, /*recoveryMode=*/true));
@@ -603,6 +700,11 @@ void loop() {
 
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   mappedInputManager.update();
+
+  if (autoRefreshRun) {
+    autoRefreshStep();
+    return;
+  }
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,

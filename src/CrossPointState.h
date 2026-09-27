@@ -26,6 +26,15 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   uint8_t readerActivityLoadCount = 0;
   bool lastSleepFromReader = false;
   uint8_t lastSleepApp = SLEEP_APP_NONE;
+  // Trains route on that snapshot (origin << 8 | towards); 0xFFFF = default board.
+  uint16_t lastSleepRoute = 0xFFFF;
+  // Auto-refresh while asleep (src/autorefresh). A timer wake is only honoured
+  // while armed. wakeAt is the planned UTC time, 0 when the clock was unknown.
+  bool autoRefreshArmed = false;
+  uint32_t autoRefreshWakeAt = 0;
+  uint8_t autoRefreshFailures = 0;  // consecutive failed timer-wake refreshes
+  bool autoRefreshStale = false;    // the snapshot kept old data after a failed refresh
+  bool autoRefreshLowBattery = false;
   bool showBootScreen = true;
 
   static const char* getFilePath() { return "/.crosspoint/state.json"; }

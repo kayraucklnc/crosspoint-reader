@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "BackgroundRefresh.h"
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
 #include "util/ScreenshotInfo.h"
@@ -94,8 +95,8 @@ class ActivityManager {
   void goToFileTransfer();
   void goToUsbDrive();
   void goToSettings();
-  void goToIncome();
-  void goToTrains();
+  void goToIncome(BackgroundMode background = BackgroundMode::Off);
+  void goToTrains(BackgroundMode background = BackgroundMode::Off, uint16_t route = DEFAULT_SLEEP_ROUTE);
   void goToPlay();
   void goToFileBrowser(std::string path = {});
   void goToLibrary();
@@ -121,6 +122,12 @@ class ActivityManager {
   // CrossPointState::SleepApp of the dashboard that will stay on the panel
   // through sleep, or SLEEP_APP_NONE when the regular sleep screen applies.
   uint8_t sleepSnapshotApp() const;
+  // Trains route shown on that snapshot, DEFAULT_SLEEP_ROUTE otherwise.
+  uint16_t sleepSnapshotRoute() const;
+  // Timer-wake refresh progress of the current activity, and handing it to the
+  // user (a button was pressed during the refresh).
+  BackgroundRefresh backgroundRefreshState() const;
+  void leaveBackgroundRefresh();
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;

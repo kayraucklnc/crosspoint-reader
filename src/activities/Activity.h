@@ -57,6 +57,11 @@ class Activity {
   // renderSleepSnapshot() draws and displays it (render lock held by the caller).
   virtual bool hasSleepSnapshot() const { return false; }
   virtual void renderSleepSnapshot() {}
+  // Snapshot detail a timer-wake refresh needs to redraw the same view.
+  virtual uint16_t sleepSnapshotRoute() const { return DEFAULT_SLEEP_ROUTE; }
+  // Timer-wake refresh of the snapshot (BackgroundRefresh.h).
+  virtual BackgroundRefresh backgroundRefreshState() const { return BackgroundRefresh::None; }
+  virtual void leaveBackgroundRefresh() {}
 
   // Start a new activity without destroying the current one
   // Note: requestUpdate() will be invoked automatically once resultHandler finishes

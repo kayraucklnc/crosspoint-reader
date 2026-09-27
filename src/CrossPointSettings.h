@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "autorefresh/AutoRefreshSchedule.h"
 #include "util/HomeButtonInput.h"
 
 class CrossPointSettings : public PersistableStore<CrossPointSettings> {
@@ -407,6 +408,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Income and Trains stay on the panel through sleep as a frozen, framed
   // snapshot instead of the sleep screen; waking reopens them.
   uint8_t keepAppOnSleep = 1;
+  // Refresh that snapshot from a deep-sleep timer wake. Choice indices, not
+  // minutes: auto_refresh::trainsMinutes() / incomeMinutes(); 0 = Off.
+  uint8_t trainsAutoRefresh = auto_refresh::TRAINS_DEFAULT_CHOICE;
+  uint8_t incomeAutoRefresh = auto_refresh::INCOME_DEFAULT_CHOICE;
+  // Local hours with no timer wakes; a wake due inside moves to the end hour.
+  // Equal values disable quiet hours.
+  uint8_t autoRefreshQuietStart = auto_refresh::QUIET_START_DEFAULT_HOUR;
+  uint8_t autoRefreshQuietEnd = auto_refresh::QUIET_END_DEFAULT_HOUR;
 
   static constexpr uint8_t MIN_SLEEP_TIMEOUT_MINUTES = 1;
   static constexpr uint8_t SLEEP_TIMEOUT_NEVER_MINUTES = 31;

@@ -54,6 +54,12 @@ void CrossPointState::toJson(JsonDocument& doc) const {
   doc["lastSleepFromReader"] = lastSleepFromReader;
   doc["lastSleepApp"] = lastSleepApp;
   doc["showBootScreen"] = showBootScreen;
+  doc["lastSleepRoute"] = lastSleepRoute;
+  doc["autoRefreshArmed"] = autoRefreshArmed;
+  doc["autoRefreshWakeAt"] = autoRefreshWakeAt;
+  doc["autoRefreshFailures"] = autoRefreshFailures;
+  doc["autoRefreshStale"] = autoRefreshStale;
+  doc["autoRefreshLowBattery"] = autoRefreshLowBattery;
 }
 
 bool CrossPointState::fromJson(JsonVariantConst doc) {
@@ -93,5 +99,11 @@ bool CrossPointState::fromJson(JsonVariantConst doc) {
   lastSleepApp = doc["lastSleepApp"] | static_cast<uint8_t>(SLEEP_APP_NONE);
   if (lastSleepApp > SLEEP_APP_TRAINS) lastSleepApp = SLEEP_APP_NONE;
   showBootScreen = doc["showBootScreen"] | true;
+  lastSleepRoute = doc["lastSleepRoute"] | static_cast<uint16_t>(0xFFFF);
+  autoRefreshArmed = doc["autoRefreshArmed"] | false;
+  autoRefreshWakeAt = doc["autoRefreshWakeAt"] | static_cast<uint32_t>(0);
+  autoRefreshFailures = doc["autoRefreshFailures"] | static_cast<uint8_t>(0);
+  autoRefreshStale = doc["autoRefreshStale"] | false;
+  autoRefreshLowBattery = doc["autoRefreshLowBattery"] | false;
   return true;
 }

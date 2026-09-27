@@ -228,6 +228,9 @@ class SettingsActivity final : public UiTabListActivity {
   void enterCategory(int categoryIndex);
   void toggleCurrentSetting();
   void openSleepTimeoutPicker();
+  // Auto-refresh intervals and quiet hours use pickers with their own labels.
+  // Returns false when the setting is not one of them.
+  bool openAutoRefreshPicker(uint8_t CrossPointSettings::* valuePtr);
   void rebuildSettingsLists();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
 
