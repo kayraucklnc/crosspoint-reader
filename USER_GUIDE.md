@@ -124,24 +124,24 @@ The Browse Files screen acts as a file and folder browser. The full path to the 
 
 ### 3.4 Library Screen
 
-The Library indexes up to 4,096 supported books on the SD card and shows their titles and authors without requiring you to remember their folders. Its four tabs provide different views. An arrow beside an indexed tab shows the sort direction:
+The Library lists up to 4,096 supported books on the SD card by title and author, so you can find a book without remembering its folder. Open it from the **See Library** card at the end of the Home carousel, or from **Settings**.
 
-- **Recent** lists the ten books you opened most recently. Hold a book to remove it from this list.
-- **Added** keeps books in the order in which the Library first discovered them. Down shows newest additions first; up shows oldest first.
-- **Title** groups books by the first letter of the title. Up sorts A-Z and down sorts Z-A. Titles beginning with numbers or punctuation appear under `#`; letters from non-English scripts, including Hebrew, have their own groups.
-- **Author** groups books by author. Up sorts A-Z and down sorts Z-A.
+Each row shows the title and, underneath, the author, the time you have spent reading the book and its length (for example `1 h 30 m read · ~312 pages`). Books you have started show their progress on the right as a percentage over a thin bar; finished books show a check mark. Page counts starting with `~` are estimates: they come from the size of the book's text and the pages the reader has actually laid out with your current font settings, so they settle once you have read a few chapters. Books are never parsed just to count their pages.
+
+The tabs sort the list by **Recent** (books you opened most recently first, then newly added books), **Title**, **Author**, **Progress**, **Time** (reading time) or **Length**. The arrow beside the active tab shows the direction. Books without progress, reading time or a known length go to the end of those sorts.
 
 On a button-only device:
 
-- Use **Up/Down** or **Left/Right** to move one row at a time. Hold a direction to move a page at a time.
-- Press **Confirm** to open the selected book.
-- Press **Back** from the book list to focus the tabs. Use **Left/Right** to select another tab, press **Confirm** to reverse its sort direction, or press **Down** to return to the list.
-- While the tabs are focused, hold **Confirm** to open Search.
-- In the Title or Author views, hold **Confirm** on a book to collapse the list to its letter or author groups. The matching group remains selected. Press **Confirm** to enter a group, or **Back** to restore the exact book and position you came from.
+- Press **Up/Down** (side buttons) to move one book at a time. Hold them to move a page at a time.
+- Press **Left/Right** to switch to the previous or next sort. Hold **Left** or **Right** to reverse the current sort.
+- Press **Confirm** to open the selected book. Hold **Confirm** for its options: **Open**, **Mark as finished** / **Mark as unfinished**, **Archive** / **Unarchive**, and **Delete**.
+- Press **Back** to return Home. Hold **Back** for the **View** menu: show **All books**, only books you are **Reading**, **Finished** books or **Archived** books, **Search** by title or author, or **Refresh library** to rescan the card.
 
-On a touch device, tap tabs, books, and the Search icon directly. Tap an active indexed tab again to reverse its sort direction. Swipe to scroll. Long-press a book in the Recent view to remove it from the list. Long-press a book in a Title or Author view to collapse to the group list, then tap a group to expand it. The **Added** view is not grouped; tapping or long-pressing a book opens it.
+Archiving hides a book from the Library and the Home carousel without moving the file; archived books are listed only in the **Archived** view. While a search is active the header shows the query, and **Back** clears it.
 
-The index is created automatically the first time the Library is opened. To pick up later file changes or updated metadata, use **Settings → System → Rebuild library index**. The **Use book metadata** setting controls whether the index reads titles and authors stored inside books.
+On a touch device, tap a book to open it and long-press it for its options. Tap a sort tab to select it, and tap the active tab again to reverse it. The Search icon opens Search, and the shelf icon next to it opens the View menu.
+
+The index is created automatically the first time the Library is opened. To pick up later file changes or updated metadata, use **Refresh library** in the View menu or **Settings → System → Rebuild library index**. The **Use book metadata** setting controls whether the index reads titles and authors stored inside books.
 
 ### 3.5 File Transfer Screen
 

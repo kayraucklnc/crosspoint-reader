@@ -21,7 +21,6 @@
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "income/IncomeActivity.h"
-#include "library/LibraryActivity.h"
 #include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "network/UsbDriveActivity.h"
@@ -280,18 +279,9 @@ void ActivityManager::goToFileBrowser(std::string path) {
 }
 
 void ActivityManager::goToLibrary() {
-  auto activity = makeUniqueNoThrow<LibraryActivity>(renderer, mappedInput);
-  if (!activity) {
-    LOG_ERR("ACT", "OOM: library activity");
-    return;
-  }
-  replaceActivity(std::move(activity));
-}
-
-void ActivityManager::goToLibraryList() {
   auto activity = makeUniqueNoThrow<LibraryListActivity>(renderer, mappedInput);
   if (!activity) {
-    LOG_ERR("ACT", "OOM: library list activity");
+    LOG_ERR("ACT", "OOM: library activity");
     return;
   }
   replaceActivity(std::move(activity));

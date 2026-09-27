@@ -99,8 +99,6 @@ class ActivityManager {
   void goToPlay();
   void goToFileBrowser(std::string path = {});
   void goToLibrary();
-  // The searchable title/author list behind the Library's Search chip.
-  void goToLibraryList();
   void goToBrowser();
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   // keepSnapshot: the current activity's frozen snapshot replaces the sleep screen.

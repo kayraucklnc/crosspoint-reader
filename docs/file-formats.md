@@ -531,3 +531,37 @@ through the same module (`reading_stats::forEachBook()`, `getBook()`,
 - The file is streamed, never loaded whole: a rewrite goes to
   `reading_stats.json.tmp` and is renamed over the original. It is written at
   most every 5 minutes while reading, when the book closes and before sleep.
+
+## Library shelf state (`.crosspoint/library_meta.json`)
+
+Written by `src/LibraryMetaStore.cpp` whenever a flag or the Library's sort
+changes. Books are never moved; archiving is only a flag.
+
+```json
+{"v":2,"sort":0,"desc":57,
+ "books":{"<sd path>":{"archived":true,"finished":true,"unfinished":true}}}
+```
+
+- `sort` is the Library tab (0 Recent, 1 Title, 2 Author, 3 Progress, 4 Time,
+  5 Length) and `desc` has one bit per tab set when it sorts descending.
+- A book appears only while it has a flag. `finished` marks a book finished by
+  hand; `unfinished` overrides a finish implied by reading stats or progress.
+- Version 1 files also carried `view` and `filter`; both are ignored.
+
+## Library lengths (`.crosspoint/library_lengths.bin`)
+
+Written by `src/activities/library/LibraryLengthCache.cpp`: what a book's page
+estimate is made from, measured once per book. Little-endian, append-only.
+
+```
+[u32 magic "LLN1"][u32 bytes per page learned from the reader, 0 = none]
+{ [u64 path hash (clixPathHash)][u32 file size][u32 content bytes] }*
+```
+
+- Content bytes are the uncompressed sizes of an EPUB's `.xhtml`/`.html`/`.htm`
+  entries, summed from the ZIP central directory without inflating anything.
+- An entry counts only while the file size still matches; later entries win.
+- Bytes per page comes from chapters the reader has laid out (spine bytes over
+  the page count in `progress.bin`), blended across books, so estimates follow
+  the reader's font and margins. Opened books use their own chapter instead.
+- The file starts over past 8192 entries. Deleting it only costs re-measuring.
