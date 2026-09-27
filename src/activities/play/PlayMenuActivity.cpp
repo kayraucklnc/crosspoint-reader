@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "BlackjackActivity.h"
+#include "ConnectionsActivity.h"
 #include "Game2048Activity.h"
 #include "JokersActivity.h"
 #include "JokersArt.h"
@@ -16,6 +17,7 @@
 #include "SketchActivity.h"
 #include "SnakeActivity.h"
 #include "SokobanActivity.h"
+#include "TriviaActivity.h"
 #include "VoxelActivity.h"
 #include "WordleActivity.h"
 #include "components/UITheme.h"
@@ -41,7 +43,10 @@ constexpr PlayMenuActivity::Entry GAMES[] = {
     {StrId::STR_PLAY_2048, StrId::STR_PLAY_2048_DESC, &glyphs::game2048, &make<Game2048Activity>},
     {StrId::STR_PLAY_MINES, StrId::STR_PLAY_MINES_DESC, &MinesweeperActivity::drawMenuIcon, &make<MinesweeperActivity>},
     {StrId::STR_PLAY_SOKOBAN, StrId::STR_PLAY_SOKOBAN_DESC, &glyphs::sokoban, &make<SokobanActivity>},
+    {StrId::STR_PLAY_CONNECTIONS, StrId::STR_PLAY_CONNECTIONS_DESC, &ConnectionsActivity::drawMenuIcon,
+     &make<ConnectionsActivity>},
     {StrId::STR_PLAY_WORDLE, StrId::STR_PLAY_WORDLE_DESC, &glyphs::wordle, &make<WordleActivity>},
+    {StrId::STR_PLAY_TRIVIA, StrId::STR_PLAY_TRIVIA_DESC, &TriviaActivity::drawMenuIcon, &make<TriviaActivity>},
     {StrId::STR_PLAY_BLACKJACK, StrId::STR_PLAY_BLACKJACK_DESC, &glyphs::blackjack, &make<BlackjackActivity>},
     {StrId::STR_PLAY_JOKERS, StrId::STR_PLAY_JOKERS_DESC, &jokersIcon, &make<JokersActivity>},
     {StrId::STR_PLAY_VOXEL, StrId::STR_PLAY_VOXEL_DESC, &glyphs::voxel, &make<VoxelActivity>},
