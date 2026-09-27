@@ -483,7 +483,11 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::ChooseWallpaper:
         if (auto activity = makeUniqueNoThrow<WallpaperPickerActivity>(renderer, mappedInput)) {
-          startActivityForResult(std::move(activity), resultHandler);
+          // The picker can change the wallpaper mode, which adds or removes this row.
+          startActivityForResult(std::move(activity), [this](const ActivityResult&) {
+            SETTINGS.saveToFile();
+            rebuildSettingsLists();
+          });
         } else {
           LOG_ERR("SETTINGS", "OOM: WallpaperPickerActivity");
         }
