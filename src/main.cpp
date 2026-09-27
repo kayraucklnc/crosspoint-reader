@@ -15,18 +15,19 @@
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <OrderedDither.h>
 #include <SPI.h>
 #include <VectorFontSupport.h>
 #include <WiFi.h>
 #include <XteinkDetect.h>
 #include <builtinFonts/all.h>
-#include <OrderedDither.h>
 
 #include <cstring>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
+#include "LibraryMetaStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
@@ -438,6 +439,7 @@ void setup() {
   timezones::applyToClock();
   ordered_dither::mode = SETTINGS.imageDithering;
   RECENT_BOOKS.loadFromFile();
+  LIBRARY_META.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
