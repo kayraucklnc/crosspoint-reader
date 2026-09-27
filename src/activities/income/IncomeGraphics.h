@@ -29,10 +29,10 @@ int drawStepStatus(const GfxRenderer& renderer, int x, int y, int width, bool al
 // truncated with "..." if text remains. Returns the number of lines written.
 int wrapText(const GfxRenderer& renderer, int fontId, const char* text, int maxWidth, char (*lines)[96], int maxLines);
 
-// "$1,234.56" below $1000, "$12,345" above.
+// Whole dollars with thousands separators ("$1,234"), cents dropped (rounded toward zero).
 void formatUsd(int64_t cents, char* buf, int bufSize);
 
-// "$950", "$1.2k", "$34k" for chart labels.
+// Chart labels: "$950", "$4,321", then "$34k" from $10,000; rounded toward zero.
 void formatUsdShort(int64_t cents, char* buf, int bufSize);
 
 }  // namespace income_gfx

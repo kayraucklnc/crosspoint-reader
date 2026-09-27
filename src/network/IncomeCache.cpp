@@ -5,7 +5,7 @@
 #include <Logging.h>
 
 namespace {
-constexpr int CACHE_VERSION = 1;
+constexpr int CACHE_VERSION = 2;  // 2: Gross from balance transactions, non-USD counts
 }
 
 bool IncomeCache::load() {
@@ -24,6 +24,11 @@ bool IncomeCache::load() {
   for (int day = 1; day <= MAX_DAYS && day <= static_cast<int>(closed.size()); day++) {
     closedCents[day] = closed[day - 1] | static_cast<int64_t>(0);
   }
+  JsonArrayConst closedNonUsdJson = doc["closedNonUsd"];
+  for (int day = 1; day <= MAX_DAYS && day <= static_cast<int>(closedNonUsdJson.size()); day++) {
+    closedNonUsd[day] = closedNonUsdJson[day - 1] | static_cast<uint16_t>(0);
+  }
+  balanceDeniedAt = doc["noBalanceAt"] | static_cast<int64_t>(0);
 
   JsonObjectConst last = doc["last"];
   if (!last.isNull()) {
@@ -37,6 +42,11 @@ bool IncomeCache::load() {
       lastSummary.monthCents = last["month"] | static_cast<int64_t>(0);
       lastSummary.monthStart = last["monthStart"] | static_cast<int64_t>(0);
       lastSummary.fetchedAt = last["fetchedAt"] | static_cast<int64_t>(0);
+      JsonArrayConst nonUsd = last["nonUsd"];
+      for (int i = 0; i < IncomeSummary::DAY_COUNT && i < static_cast<int>(nonUsd.size()); i++) {
+        lastSummary.nonUsd[i] = nonUsd[i] | static_cast<uint16_t>(0);
+      }
+      lastSummary.nonUsdCharges = last["nonUsdMonth"] | 0;
       hasSummary = true;
     }
   }
@@ -51,6 +61,9 @@ bool IncomeCache::save() const {
   doc["known"] = closedKnown;
   JsonArray closed = doc["closed"].to<JsonArray>();
   for (int day = 1; day <= MAX_DAYS; day++) closed.add(closedCents[day]);
+  JsonArray closedNonUsdJson = doc["closedNonUsd"].to<JsonArray>();
+  for (int day = 1; day <= MAX_DAYS; day++) closedNonUsdJson.add(closedNonUsd[day]);
+  if (balanceDeniedAt > 0) doc["noBalanceAt"] = static_cast<int64_t>(balanceDeniedAt);
 
   if (hasSummary) {
     JsonObject last = doc["last"].to<JsonObject>();
@@ -63,6 +76,9 @@ bool IncomeCache::save() const {
     last["month"] = lastSummary.monthCents;
     last["monthStart"] = static_cast<int64_t>(lastSummary.monthStart);
     last["fetchedAt"] = static_cast<int64_t>(lastSummary.fetchedAt);
+    JsonArray nonUsd = last["nonUsd"].to<JsonArray>();
+    for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) nonUsd.add(lastSummary.nonUsd[i]);
+    last["nonUsdMonth"] = lastSummary.nonUsdCharges;
   }
 
   String out;

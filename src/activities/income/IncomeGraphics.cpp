@@ -190,32 +190,32 @@ int wrapText(const GfxRenderer& renderer, const int fontId, const char* text, co
   if (*p && count > 0) {
     char* last = lines[count - 1];
     size_t len = strlen(last);
-    while (len > 0 && renderer.getTextWidth(fontId, last) + renderer.getTextWidth(fontId, "...") > maxWidth) last[--len] = '\0';
+    while (len > 0 && renderer.getTextWidth(fontId, last) + renderer.getTextWidth(fontId, "...") > maxWidth)
+      last[--len] = '\0';
     snprintf(last + len, 96 - len, "...");
   }
   return count;
 }
 
+// Whole dollars, rounded toward zero, so a figure never overstates income.
 void formatUsd(const int64_t cents, char* buf, const int bufSize) {
   const bool negative = cents < 0;
-  const long long abs = negative ? -cents : cents;
+  const long long dollars = (negative ? -cents : cents) / 100;
   char whole[24];
-  groupThousands(abs / 100, whole, sizeof(whole));
-  if (abs >= 100000) {
-    snprintf(buf, bufSize, "%s$%s", negative ? "-" : "", whole);
-  } else {
-    snprintf(buf, bufSize, "%s$%s.%02lld", negative ? "-" : "", whole, abs % 100);
-  }
+  groupThousands(dollars, whole, sizeof(whole));
+  snprintf(buf, bufSize, "%s$%s", negative && dollars > 0 ? "-" : "", whole);
 }
 
 void formatUsdShort(const int64_t cents, char* buf, const int bufSize) {
-  const long long dollars = cents / 100;
+  const bool negative = cents < 0;
+  const long long dollars = (negative ? -cents : cents) / 100;
+  const char* sign = negative && dollars > 0 ? "-" : "";
   if (dollars >= 10000) {
-    snprintf(buf, bufSize, "$%lldk", dollars / 1000);
-  } else if (dollars >= 1000) {
-    snprintf(buf, bufSize, "$%lld.%lldk", dollars / 1000, (dollars % 1000) / 100);
+    snprintf(buf, bufSize, "%s$%lldk", sign, dollars / 1000);
   } else {
-    snprintf(buf, bufSize, "$%lld", dollars);
+    char whole[24];
+    groupThousands(dollars, whole, sizeof(whole));
+    snprintf(buf, bufSize, "%s$%s", sign, whole);
   }
 }
 

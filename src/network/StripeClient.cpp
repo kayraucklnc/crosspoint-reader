@@ -25,10 +25,19 @@ constexpr int WINDOW_OLDEST = IncomeSummary::DAY_COUNT - 1;
 
 int requestCount = 0;
 constexpr time_t FUTURE_SLACK = 600;
+// A key found without Balance read goes straight to the charges list for this
+// long, so a Gross refresh stays one request; then balance is tried again.
+constexpr time_t BALANCE_REPROBE_SECONDS = 12 * 3600;
 
-// Cached numbers are only valid for the amount mode and day boundary they were computed with.
-uint8_t cacheMode(const StripeClient::Amount amount) {
-  return static_cast<uint8_t>(static_cast<uint8_t>(amount) | (SETTINGS.incomeDayUtc ? 2 : 0));
+// Where GROSS numbers come from: balance transactions (every currency, settled
+// in USD) or, for keys without Balance read, the charges list (USD only).
+enum class Source : uint8_t { BALANCE, CHARGES };
+constexpr uint8_t CHARGES_SOURCE_BIT = 4;
+
+// Cached numbers are only valid for the amount mode, source and day boundary they were computed with.
+uint8_t cacheMode(const StripeClient::Amount amount, const Source source) {
+  return static_cast<uint8_t>(static_cast<uint8_t>(amount) | (SETTINGS.incomeDayUtc ? 2 : 0) |
+                              (source == Source::CHARGES ? CHARGES_SOURCE_BIT : 0));
 }
 
 // Day boundaries follow the device timezone, or UTC when incomeDayUtc is set
@@ -61,29 +70,38 @@ time_t localMidnight(const time_t now, const int daysAgo, const int dayOfMonth =
   return mktime(&local);
 }
 
-// Value of one record in cents, or false if it doesn't count toward income.
-bool recordValue(const StripeClient::Amount amount, const StripeCharge& record, int64_t& cents) {
-  if (record.currency != "usd") return false;
-  if (amount == StripeClient::Amount::GROSS) {
-    if (record.status != "succeeded") return false;
-    cents = record.amount - record.amountRefunded;
-    return true;
-  }
-  static constexpr const char* NET_TYPES[] = {"charge", "payment", "refund", "payment_refund", "adjustment"};
-  for (const char* type : NET_TYPES) {
-    if (record.type == type) {
-      cents = record.net;
-      return true;
-    }
+bool isType(const StripeCharge& record, const char* const* types, const size_t count) {
+  for (size_t i = 0; i < count; i++) {
+    if (record.type == types[i]) return true;
   }
   return false;
 }
 
+// Value of one record in cents, or false if it doesn't count toward income.
+bool recordValue(const StripeClient::Amount amount, const Source source, const StripeCharge& record, int64_t& cents) {
+  if (record.currency != "usd") return false;
+  if (source == Source::CHARGES) {
+    if (record.status != "succeeded") return false;
+    cents = record.amount - record.amountRefunded;
+    return true;
+  }
+  if (amount == StripeClient::Amount::GROSS) {
+    // Charges at their USD settlement amount, less refunds (dated when refunded).
+    static constexpr const char* GROSS_TYPES[] = {"charge", "payment", "refund", "payment_refund"};
+    if (!isType(record, GROSS_TYPES, sizeof(GROSS_TYPES) / sizeof(GROSS_TYPES[0]))) return false;
+    cents = record.amount;
+    return true;
+  }
+  static constexpr const char* NET_TYPES[] = {"charge", "payment", "refund", "payment_refund", "adjustment"};
+  if (!isType(record, NET_TYPES, sizeof(NET_TYPES) / sizeof(NET_TYPES[0]))) return false;
+  cents = record.net;
+  return true;
+}
 
 // Streams every record created at or after `since` into onRecord.
-StripeClient::Result fetchRecords(const StripeClient::Amount amount, const std::string& authorization,
-                                  const time_t since, const StripeChargeScanner::ChargeCallback& onRecord) {
-  const char* base = amount == StripeClient::Amount::GROSS ? CHARGES_URL : BALANCE_URL;
+StripeClient::Result fetchRecords(const Source source, const std::string& authorization, const time_t since,
+                                  const StripeChargeScanner::ChargeCallback& onRecord) {
+  const char* base = source == Source::CHARGES ? CHARGES_URL : BALANCE_URL;
   std::string startingAfter;
   for (int page = 0; page < MAX_PAGES; page++) {
     char url[256];
@@ -130,24 +148,23 @@ bool StripeClient::loadKey(std::string& outKey) {
 
 bool StripeClient::loadCachedSummary(const Amount amount, IncomeSummary& out) {
   IncomeCache cache;
-  if (!cache.load() || cache.amountMode != cacheMode(amount) || !cache.hasSummary) return false;
+  // Either source's numbers are fine to show while the refresh runs.
+  if (!cache.load() || (cache.amountMode & ~CHARGES_SOURCE_BIT) != cacheMode(amount, Source::BALANCE) ||
+      !cache.hasSummary) {
+    return false;
+  }
   out = cache.lastSummary;
   return true;
 }
 
 int StripeClient::lastRequestCount() { return requestCount; }
 
-StripeClient::Result StripeClient::fetchIncome(const Amount amount, IncomeSummary& out) {
-  requestCount = 0;
-  std::string key;
-  if (!loadKey(key)) return Result::NO_KEY;
-
-  time_t now = 0;
-  if (!network_time::ensure(now)) {
-    LOG_ERR("STRIPE", "Clock not set; cannot bucket income by day");
-    return Result::NO_TIME;
-  }
-
+namespace {
+// One refresh from one source: re-fetches the five-day window plus any closed
+// days of this month missing from the SD cache, then updates the cache.
+// `balanceDeniedAt` is stored with it (0 once balance transactions worked).
+StripeClient::Result fetchFrom(const StripeClient::Amount amount, const Source source, const std::string& key,
+                               const time_t now, const time_t balanceDeniedAt, IncomeSummary& out) {
   IncomeSummary fresh;
   fresh.fetchedAt = now;
   for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) fresh.dayStart[i] = localMidnight(now, i);
@@ -160,12 +177,12 @@ StripeClient::Result StripeClient::fetchIncome(const Amount amount, IncomeSummar
 
   IncomeCache cache;
   // A cache written by a run with a wrong clock (fetched "in the future") is not trusted.
-  const bool cacheValid = cache.load() && cache.monthKey == monthKey && cache.amountMode == cacheMode(amount) &&
+  const bool cacheValid = cache.load() && cache.monthKey == monthKey && cache.amountMode == cacheMode(amount, source) &&
                           cache.lastSummary.fetchedAt <= now + FUTURE_SLACK;
   if (!cacheValid) {
     cache = IncomeCache{};
     cache.monthKey = monthKey;
-    cache.amountMode = cacheMode(amount);
+    cache.amountMode = cacheMode(amount, source);
   } else if (cache.hasSummary) {
     // Freeze days that have slid out of the window since the last refresh.
     for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) {
@@ -175,37 +192,39 @@ StripeClient::Result StripeClient::fetchIncome(const Amount amount, IncomeSummar
       calendarOf(start, day);
       // Only freeze days whose boundary matches today's calendar (TZ/clock consistency); others refetch.
       if (localMidnight(start + 3600, 0) != start) continue;
-      if (!cache.isKnown(day.tm_mday)) cache.setClosed(day.tm_mday, cache.lastSummary.cents[i]);
+      if (!cache.isKnown(day.tm_mday)) {
+        cache.setClosed(day.tm_mday, cache.lastSummary.cents[i], cache.lastSummary.nonUsd[i]);
+      }
     }
   }
+  cache.balanceDeniedAt = balanceDeniedAt;
 
   int firstUnknown = 0;
   for (int day = 1; day <= lastClosedDay && firstUnknown == 0; day++) {
     if (!cache.isKnown(day)) firstUnknown = day;
   }
-  const time_t since =
-      firstUnknown > 0 ? std::min(localMidnight(now, 0, firstUnknown), fresh.dayStart[WINDOW_OLDEST])
-                       : fresh.dayStart[WINDOW_OLDEST];
-
-  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
-      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
-    LOG_ERR("STRIPE", "Not enough heap for TLS: free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
-    return Result::LOW_MEMORY;
-  }
+  const time_t since = firstUnknown > 0 ? std::min(localMidnight(now, 0, firstUnknown), fresh.dayStart[WINDOW_OLDEST])
+                                        : fresh.dayStart[WINDOW_OLDEST];
 
   int64_t fetchedByDay[IncomeCache::MAX_DAYS + 1] = {};
+  uint16_t nonUsdByDay[IncomeCache::MAX_DAYS + 1] = {};
   int futureRecords = 0;
   auto onRecord = [&](const StripeCharge& record) {
-    int64_t cents = 0;
-    if (!recordValue(amount, record, cents)) return;
     // A record "from the future" means our clock is behind; never let it land in today.
     if (record.created > now + FUTURE_SLACK) {
       futureRecords++;
       return;
     }
+    int64_t cents = 0;
+    const bool counted = recordValue(amount, source, record, cents);
+    // Only the charges list can hold other currencies without a USD value.
+    const bool skippedForeign =
+        !counted && source == Source::CHARGES && record.currency != "usd" && record.status == "succeeded";
+    if (!counted && !skippedForeign) return;
     for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) {
       if (record.created >= fresh.dayStart[i]) {
-        fresh.cents[i] += cents;
+        if (counted) fresh.cents[i] += cents;
+        if (skippedForeign) fresh.nonUsd[i]++;
         break;
       }
     }
@@ -213,26 +232,72 @@ StripeClient::Result StripeClient::fetchIncome(const Amount amount, IncomeSummar
       const time_t created = static_cast<time_t>(record.created);
       struct tm day;
       calendarOf(created, day);
-      fetchedByDay[day.tm_mday] += cents;
+      if (counted) fetchedByDay[day.tm_mday] += cents;
+      if (skippedForeign) nonUsdByDay[day.tm_mday]++;
     }
   };
 
-  const Result result = fetchRecords(amount, "Bearer " + key, since, onRecord);
-  if (result != Result::OK) return result;
+  const StripeClient::Result result = fetchRecords(source, "Bearer " + key, since, onRecord);
+  if (result != StripeClient::Result::OK) return result;
   if (futureRecords > 0) LOG_ERR("STRIPE", "Ignored %d records dated after now; clock is behind", futureRecords);
 
   for (int day = std::max(1, firstUnknown); firstUnknown > 0 && day <= lastClosedDay; day++) {
-    cache.setClosed(day, fetchedByDay[day]);
+    cache.setClosed(day, fetchedByDay[day], nonUsdByDay[day]);
   }
-  for (int day = 1; day <= lastClosedDay; day++) fresh.monthCents += cache.closedCents[day];
+  for (int day = 1; day <= lastClosedDay; day++) {
+    fresh.monthCents += cache.closedCents[day];
+    fresh.nonUsdCharges += cache.closedNonUsd[day];
+  }
   for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) {
-    if (fresh.dayStart[i] >= fresh.monthStart) fresh.monthCents += fresh.cents[i];
+    if (fresh.dayStart[i] < fresh.monthStart) continue;
+    fresh.monthCents += fresh.cents[i];
+    fresh.nonUsdCharges += fresh.nonUsd[i];
   }
 
   cache.lastSummary = fresh;
   cache.hasSummary = true;
   cache.save();
   out = fresh;
-  LOG_INF("STRIPE", "Income refreshed with %d request(s)%s", requestCount, firstUnknown > 0 ? " (month backfill)" : "");
-  return Result::OK;
+  LOG_INF("STRIPE", "Income refreshed from %s with %d request(s)%s", source == Source::CHARGES ? "charges" : "balance",
+          requestCount, firstUnknown > 0 ? " (month backfill)" : "");
+  return StripeClient::Result::OK;
+}
+}  // namespace
+
+StripeClient::Result StripeClient::fetchIncome(const Amount amount, IncomeSummary& out) {
+  requestCount = 0;
+  std::string key;
+  if (!loadKey(key)) return Result::NO_KEY;
+
+  time_t now = 0;
+  if (!network_time::ensure(now)) {
+    LOG_ERR("STRIPE", "Clock not set; cannot bucket income by day");
+    return Result::NO_TIME;
+  }
+
+  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
+      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
+    LOG_ERR("STRIPE", "Not enough heap for TLS: free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+    return Result::LOW_MEMORY;
+  }
+
+  // A Gross key already known to lack Balance read skips the probe until it is due again.
+  IncomeCache previous;
+  previous.load();
+  const time_t deniedAt = previous.balanceDeniedAt;
+  const bool denied = amount == Amount::GROSS && deniedAt > 0 && deniedAt <= now + FUTURE_SLACK &&
+                      now - deniedAt < BALANCE_REPROBE_SECONDS;
+#ifdef SIMULATOR
+  // QA hook: CROSSPOINT_SIM_STRIPE_NO_BALANCE=1 answers balance requests as a key without Balance read.
+  const bool simulateNoBalance = getenv("CROSSPOINT_SIM_STRIPE_NO_BALANCE") != nullptr;
+#else
+  constexpr bool simulateNoBalance = false;
+#endif
+  if (!denied && !(simulateNoBalance && amount == Amount::GROSS)) {
+    const Result result = fetchFrom(amount, Source::BALANCE, key, now, 0, out);
+    if (result != Result::FORBIDDEN || amount != Amount::GROSS) return result;
+    LOG_INF("STRIPE", "Key lacks Balance read; using USD charges only");
+  }
+  if (amount != Amount::GROSS) return Result::FORBIDDEN;
+  return fetchFrom(amount, Source::CHARGES, key, now, denied ? deniedAt : now, out);
 }
