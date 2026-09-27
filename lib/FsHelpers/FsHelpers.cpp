@@ -207,3 +207,37 @@ void sanitizePathComponentForFat32(const char* input, char* output, size_t maxLe
 }
 
 }  // namespace FsHelpers
+
+namespace {
+bool equalsIgnoreCase(const std::string_view a, const std::string_view b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); i++) {
+    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+  }
+  return true;
+}
+}  // namespace
+
+bool FsHelpers::isSystemFolderName(const std::string_view name) {
+  static constexpr std::string_view SYSTEM_FOLDERS[] = {"XTCache", "System Volume Information", "LOST.DIR",
+                                                        "$RECYCLE.BIN", "sleep", "sleep-overlay", "Pushed Images"};
+  if (!name.empty() && name[0] == '.') return true;
+  for (const auto folder : SYSTEM_FOLDERS) {
+    if (equalsIgnoreCase(name, folder)) return true;
+  }
+  return false;
+}
+
+bool FsHelpers::isSystemPath(const std::string_view path) {
+  size_t start = path.empty() || path[0] != '/' ? 0 : 1;
+  while (start < path.size()) {
+    const size_t slash = path.find('/', start);
+    if (slash == std::string_view::npos) {
+      // Last component is the file itself; only root-level logs are system files.
+      return start == 1 && equalsIgnoreCase(path.substr(start), "crash_report.txt");
+    }
+    if (isSystemFolderName(path.substr(start, slash - start))) return true;
+    start = slash + 1;
+  }
+  return false;
+}

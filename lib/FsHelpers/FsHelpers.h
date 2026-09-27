@@ -25,6 +25,15 @@ inline bool checkFileExtension(const String& fileName, const char* extension) {
   return checkFileExtension(std::string_view{fileName.c_str(), fileName.length()}, extension);
 }
 
+// Folders that hold system, cache or app data rather than books: the stock
+// Xteink firmware's XTCache, OS metadata folders, and wallpaper folders.
+// Matched case-insensitively against a single folder name.
+bool isSystemFolderName(std::string_view name);
+
+// True when a card path lives inside a system folder (any component) or is a
+// firmware-written log such as /crash_report.txt, so it is never a book.
+bool isSystemPath(std::string_view path);
+
 // Check for either .jpg or .jpeg extension (case-insensitive)
 bool hasJpgExtension(std::string_view fileName);
 inline bool hasJpgExtension(const String& fileName) {

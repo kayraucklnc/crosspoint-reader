@@ -103,7 +103,11 @@ void RecentBooksStore::updatePath(const std::string& oldPath, const std::string&
   saveToFile();
 }
 
-bool RecentBooksStore::isMissing(const RecentBook& book) { return !Storage.exists(book.path.c_str()); }
+// System files (stock-firmware caches, crash logs) count as missing so they
+// drop off Home even when they still exist on the card.
+bool RecentBooksStore::isMissing(const RecentBook& book) {
+  return FsHelpers::isSystemPath(book.path) || !Storage.exists(book.path.c_str());
+}
 
 bool RecentBooksStore::pruneMissing() {
   const size_t before = recentBooks.size();

@@ -473,6 +473,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
     const std::string name(st.nameBuf);
 
     if (isDir) {
+      if (FsHelpers::isSystemFolderName(name)) continue;
       const size_t resumePosition = dir.position();
       dir.close();
       walk(st, joinLibraryPath(path, name), depth + 1);
@@ -488,6 +489,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       continue;
     }
     if (!isBookName(name)) continue;
+    if (FsHelpers::isSystemPath(joinLibraryPath(path, name))) continue;
 
     // A zero-length book is a dangling directory entry: the name enumerates but
     // the contents do not exist. Counted rather than silently dropped.
