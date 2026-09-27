@@ -7,6 +7,7 @@
 #include <Logging.h>
 
 #include <cctype>
+#include <cstring>
 #include <string_view>
 
 #include "MappedInputManager.h"
@@ -170,6 +171,24 @@ inline bool isTouchMenuGesture(const GfxRenderer& renderer, const MappedInputMan
     return true;
   }
   return isTouchMenuTap(renderer, input);
+}
+
+// True when more than `threshold` of the B/W framebuffer is black (sampled
+// every 16th byte). Dark pages leave strong ghosts under a fast refresh, so
+// Smart Refresh cleans the panel on the page that follows them.
+inline bool isMostlyDark(const GfxRenderer& renderer, const float threshold = 0.22f) {
+  const uint8_t* fb = renderer.getFrameBuffer();
+  const size_t size = renderer.getBufferSize();
+  if (!fb || size < 4) return false;
+  uint32_t black = 0;
+  uint32_t sampled = 0;
+  for (size_t i = 0; i + 4 <= size; i += 16) {
+    uint32_t word;
+    memcpy(&word, fb + i, sizeof(word));  // RISC-V: no unaligned loads
+    black += 32 - __builtin_popcount(word);
+    sampled += 32;
+  }
+  return static_cast<float>(black) > static_cast<float>(sampled) * threshold;
 }
 
 // One helper, blocking or deferred: the async form starts the refresh and

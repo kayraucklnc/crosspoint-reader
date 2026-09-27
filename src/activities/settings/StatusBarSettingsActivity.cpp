@@ -11,6 +11,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ReadingStats.h"
 
 namespace fui = freeink::ui;
 
@@ -26,6 +27,7 @@ enum MenuItem {
   ITEM_TITLE,
   ITEM_BATTERY,
   ITEM_XTC_STATUS_BAR,
+  ITEM_TIME_LEFT,
   ITEM_CLOCK,  // RTC boards only
   ITEM_COUNT
 };
@@ -43,6 +45,7 @@ const StrId menuNames[FULL_MENU_ITEMS] = {
     StrId::STR_TITLE,
     StrId::STR_BATTERY,
     StrId::STR_XTC_STATUS_BAR,
+    StrId::STR_TIME_LEFT,
     StrId::STR_CLOCK,
 };
 
@@ -58,6 +61,10 @@ const StrId titleNames[TITLE_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrI
 
 constexpr int XTC_STATUS_BAR_ITEMS = 3;
 const StrId xtcStatusBarNames[XTC_STATUS_BAR_ITEMS] = {StrId::STR_HIDE, StrId::STR_BOTTOM, StrId::STR_TOP};
+
+constexpr int TIME_LEFT_ITEMS = CrossPointSettings::STATUS_BAR_TIME_LEFT_COUNT;
+const StrId timeLeftNames[TIME_LEFT_ITEMS] = {StrId::STR_HIDE, StrId::STR_CHAPTER, StrId::STR_BOOK,
+                                              StrId::STR_TIME_LEFT_BOTH};
 
 constexpr int STATUS_BAR_CLOCK_ITEMS = CrossPointSettings::STATUS_BAR_CLOCK_MODE_COUNT;
 const StrId statusBarClockNames[STATUS_BAR_CLOCK_ITEMS] = {StrId::STR_HIDE, StrId::STR_DIR_RIGHT, StrId::STR_DIR_LEFT};
@@ -88,6 +95,10 @@ void StatusBarSettingsActivity::onEnter() {
 
   if (SETTINGS.xtcStatusBarMode >= XTC_STATUS_BAR_ITEMS) {
     SETTINGS.xtcStatusBarMode = CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_HIDE;
+  }
+
+  if (SETTINGS.statusBarTimeLeft >= TIME_LEFT_ITEMS) {
+    SETTINGS.statusBarTimeLeft = CrossPointSettings::TIME_LEFT_HIDE;
   }
 
   if (SETTINGS.statusBarClock >= STATUS_BAR_CLOCK_ITEMS) {
@@ -154,6 +165,13 @@ void StatusBarSettingsActivity::handleSelection() {
                          SETTINGS.saveToFile();
                        });
       return;
+    case ITEM_TIME_LEFT:
+      optionPopup.show(StrId::STR_TIME_LEFT, timeLeftNames, TIME_LEFT_ITEMS, SETTINGS.statusBarTimeLeft,
+                       [this](int idx) {
+                         SETTINGS.statusBarTimeLeft = idx;
+                         SETTINGS.saveToFile();
+                       });
+      return;
     case ITEM_CLOCK:
       SETTINGS.statusBarClock = (SETTINGS.statusBarClock + 1) % STATUS_BAR_CLOCK_ITEMS;
       break;
@@ -179,6 +197,8 @@ std::string StatusBarSettingsActivity::rowValueText(const int index) {
       return SETTINGS.statusBarBattery ? tr(STR_SHOW) : tr(STR_HIDE);
     case ITEM_XTC_STATUS_BAR:
       return I18N.get(xtcStatusBarNames[SETTINGS.xtcStatusBarMode]);
+    case ITEM_TIME_LEFT:
+      return I18N.get(timeLeftNames[SETTINGS.statusBarTimeLeft]);
     case ITEM_CLOCK:
       return I18N.get(statusBarClockNames[SETTINGS.statusBarClock]);
     default:
@@ -245,7 +265,10 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
   }
 
   // Anchor the preview as a footer directly above the button hints.
-  GUI.drawStatusBar(renderer, 75, 8, 32, title, metrics.buttonHintsHeight, 0, false);
+  char timeLeft[48] = "";
+  reading_stats::formatTimeLeftShort(12 * 60, 3 * 3600 + 5 * 60, SETTINGS.statusBarTimeLeft, timeLeft,
+                                     sizeof(timeLeft));
+  GUI.drawStatusBar(renderer, 75, 8, 32, title, metrics.buttonHintsHeight, 0, false, false, false, timeLeft);
 
   renderer.drawCenteredText(UI_10_FONT_ID,
                             renderer.getScreenHeight() - UITheme::getInstance().getStatusBarHeight() -

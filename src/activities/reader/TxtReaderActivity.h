@@ -18,6 +18,7 @@ class TxtReaderActivity final : public ReaderActivity {
   // Streaming text reader - stores file offsets for each page
   std::vector<size_t> pageOffsets;
   std::vector<std::string> currentPageLines;
+  char timeLeftText[48] = "";  // status-bar estimate, refreshed per page
   int linesPerPage = 0;
   int viewportWidth = 0;
   bool initialized = false;

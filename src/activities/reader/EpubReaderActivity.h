@@ -14,6 +14,7 @@
 #include "ChapterPosition.h"
 #include "EpubReaderMenuActivity.h"
 #include "ProgressMapper.h"
+#include "QuickSettingsPanel.h"
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
@@ -53,6 +54,25 @@ class EpubReaderActivity final : public ReaderActivity {
   bool recentsEntryRemoved = false;
   unsigned long bookmarkMessageTime = 0UL;
   bool pendingReadFolderMove = false;
+  // Status-bar time-left text and the menus' long form, refreshed per rendered page.
+  char timeLeftText[48] = "";
+  char timeLeftLong[96] = "";
+
+  // Quick Settings sheet (the list-style reader menu); null while closed.
+  std::unique_ptr<QuickSettingsPanel> quickPanel;
+  unsigned long quickRelayoutAt = 0;  // millis() when the debounced re-layout is due; 0 = none
+  unsigned long quickLastPaintMs = 0;
+  bool quickPaintPending = false;
+  void openQuickSettings(bool pageOnScreen);
+  void handleQuickSettings();
+  void paintQuickPanel();
+  // Applies a debounced typography change still waiting for its re-layout.
+  void flushQuickRelayout();
+  void closeQuickSettings(bool rerender);
+  void openFullMenu();
+  void stepReaderFontSize(int direction);
+  // Spine of the last rendered page; a change is a chapter start for Smart Refresh.
+  int lastRenderedSpine = -1;
 
   // Toolbar reader menu (SETTINGS.readerMenuStyle == READER_MENU_TOOLBAR): drawn
   // over the page instead of pushing the full-screen list menu. Select opens the
@@ -175,6 +195,9 @@ class EpubReaderActivity final : public ReaderActivity {
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar() const;
+  // Estimated seconds left in the chapter and the book (0 = unknown).
+  void timeLeftSeconds(uint32_t& chapterSec, uint32_t& bookSec) const;
+  void updateReadingEstimates(uint32_t pageStart);
   void applyOrientation(uint8_t orientation);
   void applyInitialOrientation() override;
   // The orientation the current layout was built for. The control center's

@@ -194,6 +194,17 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   }
 
+  if (doc["refreshEvery"].isNull() && !doc["refreshFrequency"].isNull()) {
+    constexpr uint8_t LEGACY_30 = 4;
+    constexpr uint8_t LEGACY_NEVER = 5;
+    const uint8_t legacy = doc["refreshFrequency"] | (uint8_t)REFRESH_15;
+    refreshFrequency = legacy == LEGACY_30      ? REFRESH_30
+                       : legacy == LEGACY_NEVER ? REFRESH_NEVER
+                       : legacy < LEGACY_30     ? legacy
+                                                : REFRESH_15;
+    needsResave = true;
+  }
+
   if (doc["sleepTimeoutMinutes"].isNull() && !doc["sleepTimeout"].isNull()) {
     const uint8_t legacyValue =
         clamp(doc["sleepTimeout"] | (uint8_t)SLEEP_10_MIN, SLEEP_TIMEOUT_COUNT, (uint8_t)SLEEP_10_MIN);
@@ -282,6 +293,7 @@ CrossPointSettings::StatusBarSpec CrossPointSettings::statusBarSpec() const {
   spec.progressBarHeightPx =
       statusBarProgressBar != HIDE_PROGRESS ? static_cast<uint8_t>((statusBarProgressBarThickness + 1) * 2) : 0;
   spec.xtcMode = xtcStatusBarMode;
+  spec.timeLeftMode = statusBarTimeLeft;
   return spec;
 }
 
@@ -370,6 +382,8 @@ int CrossPointSettings::getRefreshFrequency() const {
     case REFRESH_15:
     default:
       return 15;
+    case REFRESH_20:
+      return 20;
     case REFRESH_30:
       return 30;
     case REFRESH_NEVER:

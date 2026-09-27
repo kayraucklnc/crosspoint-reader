@@ -246,7 +246,9 @@ The Settings screen allows you to configure the device's behavior. There are a f
   - "In Reader" - Show battery percentage everywhere except in reading mode
   - "Always" - Always hide battery percentage
 
-- **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages.
+- **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, 20, or 30 pages, or Off.
+
+- **Smart Refresh** (default On): Also clean the screen after a page with images or large dark areas, and when a new chapter starts, regardless of the frequency above.
 
 - **UI Theme**: Set which UI theme to use:
   
@@ -310,6 +312,7 @@ The Settings screen allows you to configure the device's behavior. There are a f
   
   - "Chapter Skip" (default) - Long-pressing skips to next/previous chapter
   - "Page Scroll" - Long-pressing scrolls a page up/down
+  - "Font Size" - Holding the next-page button makes the text one size larger, holding the previous-page button one size smaller
 - **Long-press Menu**: Selects the function bound to holding the menu button (Confirm) while reading an EPUB. **Cycles through the available functions** each time the setting is selected — additional functions may be added in future releases, so this is not a binary on/off toggle. A short press of Confirm always opens the reader menu as normal:
   - "Bookmark" (default) - Hold Confirm (~0.4 second) to drop a bookmark at the current page.
   - "KOSync" - Hold Confirm (~1 second) to launch KOReader sync directly.
@@ -651,9 +654,22 @@ The UI includes Arabic and Hebrew (menus use built-in fonts with presentation-fo
 
 ## 5. Reader Menu
 
-Press **Confirm** while reading to open the Reader Menu. From here you can access reading utilities and navigation options without leaving the book.
+Press **Confirm** while reading to open **Quick Settings**, a panel over the lower part of the page. The page above it is a live preview:
 
-Available options include:
+- The side buttons move between rows; **Left/Right** change the focused value (on the link row they move between links).
+- Rows: **Size**, **Font**, **Line Spacing**, **Margins**, **Alignment**, **Hyphenation** and **Full Refresh** (see Refresh Frequency above). A value shows at once; the page re-lays out once you stop pressing (about 0.3 s).
+- Links: **Chapters**, **Bookmarks**, **Look Up**, **Stats** (see [Reading Statistics](#reading-statistics)), **Go to %** and **More**, which opens the full Reader Menu below. **Confirm** opens the focused link, or closes the panel on a settings row; **Back** closes it.
+- The header shows the estimated time left in the chapter and in the book.
+
+Text settings changed here are global (they apply to every book), like the ones in **Settings → Reader**.
+
+### Reading Statistics
+
+While a book is open, time spent turning pages is counted (a pause of more than 3 minutes, or sleep, stops the clock). **Settings → Reader → Reading Stats** (or **Stats** in Quick Settings) shows today, this week, your daily streak, total time, the average per weekday, the last 8 weeks and your most-read books. The data lives in `/.crosspoint/reading_stats.json` and is written every few minutes, when you leave the book, and before sleep.
+
+Your reading speed is learned per book (falling back to your average across books) and drives the optional **Time Left** status bar item (**Settings → Reader → Customise Status Bar**: Chapter, Book or Both).
+
+The full Reader Menu (**More** in Quick Settings) offers:
 
 - **Select Chapter** – Open the table of contents to jump to a specific chapter (see [Chapter Selection](#51-chapter-selection) below).
 - **Footnotes** – Navigate to the footnotes for the current section *(only shown in books that contain footnotes)*.
@@ -661,6 +677,7 @@ Available options include:
 - **Reading Orientation** – Cycle through screen orientations without leaving the reader.
 - **Auto Turn (Pages Per Minute)** – Cycle through automatic page turn speed options for hands-free reading.
 - **Go to %** – Jump to a specific position in the book by percentage.
+- **Reading Stats** – Open the reading statistics screen.
 - **Take screenshot** – Save a screenshot of the current page to the `screenshots/` folder.
 - **Show page as QR** – Display a QR code encoding the current reading position.
 - **Go Home** – Close the book and return to the Home screen.

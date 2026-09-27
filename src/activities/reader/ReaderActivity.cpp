@@ -15,6 +15,7 @@
 #include "SdCardFontSystem.h"
 #include "TxtReaderActivity.h"
 #include "XtcReaderActivity.h"
+#include "util/ReadingStats.h"
 
 ReaderActivity::ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                                std::string bookPath, const bool allowFastInitialRefresh)
@@ -70,12 +71,14 @@ void ReaderActivity::onEnter() {
 
   APP_STATE.openEpubPath = bookPath;
   APP_STATE.saveToFile();
+  reading_stats::beginBook(bookPath.c_str());
   RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
   requestUpdate();
 }
 
 void ReaderActivity::onExit() {
   Activity::onExit();
+  reading_stats::endBook();
 
   // Keep rebuildable font buffers from pinning the heap between reading sessions.
   if (auto* fontCache = renderer.getFontCacheManager()) {
@@ -152,6 +155,7 @@ bool ReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, const boo
 }
 
 void ReaderActivity::loop() {
+  reading_stats::tick();
   clearEndOfBookOptionsIfNeeded();
   if (handleEndOfBookMenu()) return;
   if (handleFormatInput()) return;
@@ -186,6 +190,7 @@ void ReaderActivity::loop() {
 
 void ReaderActivity::render(RenderLock&&) {
   if (isAtEndOfBook()) {
+    reading_stats::markFinished();
     if (!endOfBookOptions) {
       endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
       if (!endOfBookOptions) LOG_ERR("READER", "OOM: EndOfBookOptions");

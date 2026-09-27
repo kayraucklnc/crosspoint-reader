@@ -506,3 +506,28 @@ make a real book disappear.
 
 `selfSize` is the expected file size. Comparing it against the real one is a free
 truncation guard: a build cut short by a power failure cannot pass.
+
+## Reading statistics (`.crosspoint/reading_stats.json`)
+
+Written by `src/util/ReadingStats.cpp`; other features (the library UI) read it
+through the same module (`reading_stats::forEachBook()`, `getBook()`,
+`loadSummary()`), which also folds in the open book's not-yet-saved time.
+
+```json
+{"v":1,
+ "books":{"<sd path>":{"sec":1234,"pages":56,"sessions":3,"first":1790468816,"last":1790469836,"finished":false,"wpm":240}},
+ "days":{"2026-09-27":1234}}
+```
+
+- Book keys are SD paths exactly as the firmware opened them (FAT long names,
+  so NFD/NFC is whatever is on the card).
+- `sec` counts active reading: the time between page turns, excluding any gap
+  over 3 minutes and sleep. `pages` counts forward page turns; `sessions` counts
+  book opens that credited any time.
+- `first`/`last` are UTC epochs (0 until the clock has been set), `finished` is
+  set on reaching the end-of-book screen and never cleared, and `wpm` is the
+  smoothed reading speed (6 text bytes = 1 word; 0 = unknown).
+- `days` holds local calendar days (device timezone) and keeps the last 400.
+- The file is streamed, never loaded whole: a rewrite goes to
+  `reading_stats.json.tmp` and is renamed over the original. It is written at
+  most every 5 minutes while reading, when the book closes and before sleep.

@@ -15,6 +15,7 @@
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ReadingStats.h"
 
 bool XtcReaderActivity::loadBook() {
   auto loadedXtc = makeUniqueNoThrow<Xtc>(bookPath, "/.crosspoint");
@@ -137,7 +138,11 @@ void XtcReaderActivity::renderStatusBarOverlay(GfxRenderer& renderer, const Stat
   const int displayPage = static_cast<int>(currentPage) + 1;
   const float progress = pageCount > 0 ? (static_cast<float>(displayPage) * 100.0f) / pageCount : 0.0f;
   const auto pageInfo = getStatusBarInfo();
-  GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title, paddingBottom);
+  char timeLeft[48];
+  reading_stats::formatPagesLeftShort(pageInfo.pageCount - pageInfo.currentPage + 1, pageCount - displayPage + 1,
+                                      sb.timeLeftMode, timeLeft, sizeof(timeLeft));
+  GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title, paddingBottom, 0,
+                    true, false, false, timeLeft);
 }
 
 void XtcReaderActivity::renderPage() {
@@ -282,23 +287,19 @@ void XtcReaderActivity::renderPage() {
     renderStatusBarOverlay(renderer, StatusBarOverlayPosition::Bottom);
   }
 
+  const bool darkPage = SETTINGS.smartRefresh && ReaderUtils::isMostlyDark(renderer);
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  if (darkPage) pagesUntilFullRefresh = 1;  // clean its ghost on the next turn
 
   LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", currentPage + 1, xtc->getPageCount(), bitDepth);
 }
 
 bool XtcReaderActivity::pageTurn(bool isForward) {
   if (!xtc) return false;
-  if (isForward) {
-    if (currentPage < xtc->getPageCount()) {
-      currentPage++;
-      return true;
-    }
-  } else {
-    if (currentPage > 0) {
-      currentPage--;
-      return true;
-    }
+  if (isForward ? currentPage < xtc->getPageCount() : currentPage > 0) {
+    currentPage = isForward ? currentPage + 1 : currentPage - 1;
+    reading_stats::onPageTurn(isForward);
+    return true;
   }
   return false;
 }

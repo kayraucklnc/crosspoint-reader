@@ -14,7 +14,6 @@
 #include <cstring>
 
 #include "AboutActivity.h"
-#include "WallpaperPickerActivity.h"
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
@@ -34,8 +33,10 @@
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "TextSettingsActivity.h"
+#include "WallpaperPickerActivity.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/stats/ReadingStatsActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
@@ -144,6 +145,7 @@ void SettingsActivity::rebuildSettingsLists() {
   readerSettings.insert(readerSettings.begin() + 1,
                         SettingInfo::Action(StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  readerSettings.push_back(SettingInfo::Action(StrId::STR_READING_STATS, SettingAction::ReadingStats));
 
   // Update currentSettings pointer and count for the active category
   switch (selectedCategoryIndex) {
@@ -481,6 +483,13 @@ void SettingsActivity::toggleCurrentSetting() {
           startActivityForResult(std::move(activity), resultHandler);
         } else {
           LOG_ERR("SETTINGS", "OOM: WallpaperPickerActivity");
+        }
+        break;
+      case SettingAction::ReadingStats:
+        if (auto activity = makeUniqueNoThrow<ReadingStatsActivity>(renderer, mappedInput)) {
+          startActivityForResult(std::move(activity), nullptr);
+        } else {
+          LOG_ERR("SETTINGS", "OOM: ReadingStatsActivity");
         }
         break;
       case SettingAction::BrowseFiles:

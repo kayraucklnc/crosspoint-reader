@@ -41,10 +41,12 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "activities/settings/TextSettingsActivity.h"
+#include "activities/stats/ReadingStatsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
 #include "util/ButtonNavigator.h"
+#include "util/ReadingStats.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -273,6 +275,13 @@ void EpubReaderActivity::openReaderMenu() {
     return;
   }
 
+  // Reached from child-screen result handlers: the framebuffer holds that
+  // screen, so the page re-renders with the sheet on top.
+  openQuickSettings(false);
+}
+
+void EpubReaderActivity::openFullMenu() {
+  pendingManualTurn = 0;
   // Child screens (chapter list, text settings) release the section to free its
   // pagination buffers; chapterPosition() covers that with the cached position.
   const ChapterPosition position = chapterPosition();
@@ -281,7 +290,7 @@ void EpubReaderActivity::openReaderMenu() {
   startActivityForResult(
       std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, epub->getTitle(), position.displayPage(),
                                                position.totalPages, bookProgressPercent, SETTINGS.orientation,
-                                               !currentPageFootnotes.empty(), !cachedBookmarks.empty()),
+                                               !currentPageFootnotes.empty(), !cachedBookmarks.empty(), timeLeftLong),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
 
@@ -374,6 +383,7 @@ void EpubReaderActivity::loop() {
     finish();
     return;
   }
+  reading_stats::tick();
 
   // Someone else turned the screen while this reader was stacked (the control
   // center's orientation tile). Reflow before the next render, or the page
@@ -488,6 +498,11 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  if (quickPanel) {
+    handleQuickSettings();
+    return;
+  }
+
   switch (mappedInput.homeButtonAction()) {
     case HomeButtonAction::ReaderMenu:
     case HomeButtonAction::Bookmark:
@@ -585,7 +600,7 @@ void EpubReaderActivity::loop() {
         if (usesToolbarMenu() && section)
           openOverlay(Overlay::Toolbar);
         else
-          openReaderMenu();
+          openQuickSettings(section != nullptr);
         return;
       default:
         break;
@@ -613,8 +628,9 @@ void EpubReaderActivity::loop() {
       pendingManualTurn = 0;
       openOverlay(Overlay::Toolbar);
     } else {
-      openReaderMenu();
+      openQuickSettings(section != nullptr);
     }
+    return;
   }
 
   if (footnoteDepth > 0 && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
@@ -674,6 +690,11 @@ void EpubReaderActivity::loop() {
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
     skipPages(nextTriggered ? 1 : -1);
     requestUpdate();
+    return;
+  }
+
+  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.FONT_SIZE_CHANGE) {
+    stepReaderFontSize(nextTriggered ? 1 : -1);
     return;
   }
 
@@ -886,6 +907,14 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       openDictionaryWordSelect();
       break;
     }
+    case EpubReaderMenuActivity::MenuAction::READING_STATS: {
+      if (auto activity = makeUniqueNoThrow<ReadingStatsActivity>(renderer, mappedInput)) {
+        startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
+      } else {
+        LOG_ERR("ERS", "OOM: ReadingStatsActivity");
+      }
+      break;
+    }
     case EpubReaderMenuActivity::MenuAction::DISPLAY_QR: {
       if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
         std::string fullText = section->getTextFromSectionFile();
@@ -1060,6 +1089,10 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
 
 bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
   if (!section) return false;
+  const auto moved = [isForwardTurn] {
+    reading_stats::onPageTurn(isForwardTurn);
+    return true;
+  };
   {
     RenderLock lock;
     clearDeferredReposition();
@@ -1068,24 +1101,24 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
     if (section->currentPage < section->pageCount - 1 || section->isBuilding()) {
       section->currentPage++;
       lastPageTurnTime = millis();
-      return true;
+      return moved();
     } else if (currentSpineIndex + 1 < epub->getSpineItemsCount()) {
       RenderLock lock;
       nextPageNumber = 0;
       currentSpineIndex++;
       section.reset();
       lastPageTurnTime = millis();
-      return true;
+      return moved();
     } else {
       currentSpineIndex = epub->getSpineItemsCount();
       lastPageTurnTime = millis();
-      return true;
+      return moved();
     }
   } else {
     if (section->currentPage > 0) {
       section->currentPage--;
       lastPageTurnTime = millis();
-      return true;
+      return moved();
     } else if (currentSpineIndex > 0) {
       RenderLock lock;
       nextPageNumber = 0;
@@ -1093,7 +1126,7 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
       currentSpineIndex--;
       section.reset();
       lastPageTurnTime = millis();
-      return true;
+      return moved();
     }
   }
   return false;
@@ -1426,6 +1459,7 @@ void EpubReaderActivity::renderBook() {
     pageLoadRetryCount = 0;
 
     currentPageVisibleOffset = p->visibleTextOffset;
+    updateReadingEstimates(p->visibleTextOffset);
     currentPageFootnotes = std::move(p->footnotes);
     currentPageLinks = std::move(p->links);
     currentPageLinkMarginLeft = orientedMarginLeft;
@@ -1565,12 +1599,20 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   scope.endScanAndPrewarm();
   const auto tPrewarm = millis();
 
-  const bool pageHasImages = page->hasImages();
+  // Under the Quick Settings sheet the page is a black-and-white preview: the
+  // grayscale passes would paint glyph and image grays through the sheet.
+  const bool quickPreview = quickPanel != nullptr;
+  const bool pageHasImages = page->hasImages() && !quickPreview;
   const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
   const bool manualRefreshPending = forcedRefreshPending;
   forcedRefreshPending = false;
+  if (SETTINGS.smartRefresh && lastRenderedSpine != -1 && lastRenderedSpine != currentSpineIndex) {
+    LOG_DBG("ERS", "Smart refresh: chapter start");
+    pagesUntilFullRefresh = 1;
+  }
+  lastRenderedSpine = currentSpineIndex;
   const bool cleanImageBasePending = manualRefreshPending || pagesUntilFullRefresh <= 1;
-  const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
+  const bool needsTextGrayscale = SETTINGS.textAntiAliasing && !quickPreview;
   const bool needsAnyGrayscale = needsTextGrayscale || pageHasImages;
   const bool absoluteImageGrayscale = pageHasImages && !gpio.deviceIsX3() &&
                                       display.getController() == HalDisplay::Controller::UC8279 &&
@@ -1603,7 +1645,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
   renderStatusBar();
+  if (quickPreview) {
+    quickPanel->render(renderer, mappedInput, timeLeftLong);
+    quickLastPaintMs = millis();
+  }
   const auto tBwRender = millis();
+  const bool darkPage = SETTINGS.smartRefresh && !pageHasImages && ReaderUtils::isMostlyDark(renderer);
 
   if (absoluteImageGrayscale) {
     const auto baseMode = cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
@@ -1641,6 +1688,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
   const auto tDisplay = millis();
+  // Clean the ghost of a dark page on the next turn (image pages already do).
+  if (darkPage) {
+    LOG_DBG("ERS", "Smart refresh: dark page, cleaning on the next turn");
+    pagesUntilFullRefresh = 1;
+  }
 
   if (tiledGrayscale) {
     constexpr int STRIP_ROWS = 80;
@@ -1820,7 +1872,162 @@ void EpubReaderActivity::renderStatusBar() const {
   }
 
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,
-                    section ? section->isBuilding() : false);
+                    section ? section->isBuilding() : false, timeLeftText);
+}
+
+void EpubReaderActivity::timeLeftSeconds(uint32_t& chapterSec, uint32_t& bookSec) const {
+  chapterSec = 0;
+  bookSec = 0;
+  const float secPerPage = reading_stats::secondsPerPage();
+  if (secPerPage <= 0 || !epub || !section) return;
+  const int pageCount = section->estimatedTotalPages();
+  const int pagesLeft = std::max(1, pageCount - section->currentPage);
+  chapterSec = static_cast<uint32_t>(pagesLeft * secPerPage);
+
+  // Later chapters, converted to pages of the current layout: the open
+  // chapter's HTML bytes per page when it is long enough to be representative,
+  // else the session's text bytes per page plus typical markup overhead.
+  constexpr float MARKUP_OVERHEAD = 1.3f;
+  const size_t chapterStart = currentSpineIndex > 0 ? epub->getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
+  const size_t chapterEnd = epub->getCumulativeSpineItemSize(currentSpineIndex);
+  const size_t bookSize = epub->getBookSize();
+  const float bytesPerPage = (pageCount >= 4 && chapterEnd > chapterStart)
+                                 ? static_cast<float>(chapterEnd - chapterStart) / static_cast<float>(pageCount)
+                                 : reading_stats::bytesPerPage() * MARKUP_OVERHEAD;
+  const float laterPages =
+      bytesPerPage > 0 && bookSize > chapterEnd ? static_cast<float>(bookSize - chapterEnd) / bytesPerPage : 0;
+  bookSec = chapterSec + static_cast<uint32_t>(laterPages * secPerPage);
+}
+
+void EpubReaderActivity::updateReadingEstimates(const uint32_t pageStart) {
+  const auto nextStart = section ? section->getVisibleTextOffsetForPage(section->currentPage + 1) : std::nullopt;
+  reading_stats::onPageShown(currentSpineIndex, pageStart, nextStart.value_or(0));
+  uint32_t chapterSec, bookSec;
+  timeLeftSeconds(chapterSec, bookSec);
+  reading_stats::formatTimeLeftShort(chapterSec, bookSec, SETTINGS.statusBarTimeLeft, timeLeftText,
+                                     sizeof(timeLeftText));
+  reading_stats::formatTimeLeftLong(chapterSec, bookSec, timeLeftLong, sizeof(timeLeftLong));
+}
+
+// ---------------------------------------------------------------------------
+// Quick Settings sheet
+// ---------------------------------------------------------------------------
+
+void EpubReaderActivity::openQuickSettings(const bool pageOnScreen) {
+  mappedInput.resetHomeButtonInput();
+  pendingManualTurn = 0;
+  automaticPageTurnActive = false;
+  auto panel = makeUniqueNoThrow<QuickSettingsPanel>(&sdFontSystem.registry());
+  if (!panel) {
+    LOG_ERR("ERS", "OOM: quick settings; falling back to the full menu");
+    openFullMenu();
+    return;
+  }
+  {
+    RenderLock lock;  // renderContents() reads quickPanel on the render task
+    quickPanel = std::move(panel);
+  }
+  quickRelayoutAt = 0;
+  quickPaintPending = false;
+  if (pageOnScreen && section) {
+    // The page is on screen and in the framebuffer: paint the sheet over it
+    // with one refresh instead of re-rendering the page first.
+    paintQuickPanel();
+  } else {
+    requestUpdate();
+  }
+}
+
+void EpubReaderActivity::paintQuickPanel() {
+  RenderLock lock;
+  settleOverlayRefresh();
+  quickPanel->render(renderer, mappedInput, timeLeftLong);
+  pushOverlayRefresh();
+  quickLastPaintMs = millis();
+  quickPaintPending = false;
+}
+
+void EpubReaderActivity::flushQuickRelayout() {
+  if (quickRelayoutAt == 0) return;
+  quickRelayoutAt = 0;
+  applyReaderTextSettings();
+}
+
+void EpubReaderActivity::closeQuickSettings(const bool rerender) {
+  flushQuickRelayout();
+  if (quickPanel->modified()) SETTINGS.saveToFile();  // the refresh row does not re-lay out
+  mappedInput.resetHomeButtonInput();
+  {
+    RenderLock lock;  // renderContents() reads quickPanel on the render task
+    quickPanel.reset();
+  }
+  quickPaintPending = false;
+  if (rerender) requestUpdate();  // the clean page, with its grayscale pass again
+}
+
+void EpubReaderActivity::handleQuickSettings() {
+  switch (quickPanel->handleInput(mappedInput, renderer)) {
+    case QuickSettingsPanel::Event::Repaint:
+      quickPaintPending = true;
+      break;
+    case QuickSettingsPanel::Event::Relayout:
+      quickPaintPending = true;
+      quickRelayoutAt = millis() + QuickSettingsPanel::RELAYOUT_DEBOUNCE_MS;
+      break;
+    case QuickSettingsPanel::Event::Close:
+      closeQuickSettings(true);
+      return;
+    case QuickSettingsPanel::Event::OpenLink: {
+      const auto link = quickPanel->link();
+      closeQuickSettings(link == QuickSettingsPanel::Link::Dictionary);
+      using Action = EpubReaderMenuActivity::MenuAction;
+      switch (link) {
+        case QuickSettingsPanel::Link::Chapters:
+          onReaderMenuConfirm(Action::SELECT_CHAPTER);
+          break;
+        case QuickSettingsPanel::Link::Bookmarks:
+          onReaderMenuConfirm(Action::BOOKMARKS);
+          break;
+        case QuickSettingsPanel::Link::Dictionary:
+          onReaderMenuConfirm(Action::DICTIONARY);
+          break;
+        case QuickSettingsPanel::Link::Stats:
+          onReaderMenuConfirm(Action::READING_STATS);
+          break;
+        case QuickSettingsPanel::Link::GoToPercent:
+          onReaderMenuConfirm(Action::GO_TO_PERCENT);
+          break;
+        default:
+          openFullMenu();
+          break;
+      }
+      return;
+    }
+    case QuickSettingsPanel::Event::None:
+      break;
+  }
+
+  // One refresh per burst of presses: the first repaints at once, later ones
+  // coalesce until the previous refresh has had time to finish.
+  const unsigned long now = millis();
+  if (quickPaintPending && !RenderLock::peek() && now - quickLastPaintMs >= QuickSettingsPanel::REPAINT_SPACING_MS) {
+    paintQuickPanel();
+  }
+  // Re-lay out the page under the sheet once the presses have stopped.
+  if (quickRelayoutAt != 0 && !quickPaintPending && static_cast<long>(now - quickRelayoutAt) >= 0) {
+    flushQuickRelayout();
+    requestUpdate();
+  }
+}
+
+void EpubReaderActivity::stepReaderFontSize(const int direction) {
+  const auto sizes = readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName);
+  const uint8_t current = snapToNearestPointSize(sizes, SETTINGS.fontPointSize);
+  const int index = static_cast<int>(std::find(sizes.begin(), sizes.end(), current) - sizes.begin()) + direction;
+  if (index < 0 || index >= static_cast<int>(sizes.size())) return;
+  SETTINGS.fontPointSize = sizes[index];
+  applyReaderTextSettings();
+  requestUpdate();
 }
 
 // ---------------------------------------------------------------------------

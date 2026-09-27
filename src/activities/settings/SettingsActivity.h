@@ -34,6 +34,7 @@ enum class SettingAction {
   FileTransfer,
   OpdsCatalog,
   ChooseWallpaper,
+  ReadingStats,
 };
 
 struct SettingInfo {

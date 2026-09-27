@@ -775,7 +775,8 @@ void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layou
 
 void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
                               const int pageCount, std::string title, const int paddingBottom, const int textYOffset,
-                              const bool fillMargin, const bool isPageBookmarked, const bool pageCountEstimated) {
+                              const bool fillMargin, const bool isPageBookmarked, const bool pageCountEstimated,
+                              const char* timeLeft) {
   auto metrics = UITheme::getInstance().getMetrics();
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
@@ -875,6 +876,13 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
       }
       renderer.drawText(SMALL_FONT_ID, clockX, textY, timeBuf);
     }
+  }
+
+  // Estimated reading time left, after the battery/clock cluster
+  if (timeLeft && timeLeft[0] != '\0') {
+    const int gap = leftClusterWidth > 0 ? 10 : 0;
+    renderer.drawText(SMALL_FONT_ID, leftClusterX + leftClusterWidth + gap, textY, timeLeft);
+    leftClusterWidth += gap + renderer.getTextWidth(SMALL_FONT_ID, timeLeft);
   }
 
   // Draw Bookmark

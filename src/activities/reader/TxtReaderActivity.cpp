@@ -15,6 +15,7 @@
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ReadingStats.h"
 
 namespace {
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
@@ -262,6 +263,10 @@ void TxtReaderActivity::renderBook() {
   size_t nextOffset;
   currentPageLines.clear();
   loadPageAtOffset(renderer, offset, currentPageLines, nextOffset);
+  reading_stats::onPageShown(0, offset, nextOffset);
+  // A plain text file is one chapter: only the book estimate applies.
+  reading_stats::formatPagesLeftShort(0, totalPages - currentPage, SETTINGS.statusBarTimeLeft, timeLeftText,
+                                      sizeof(timeLeftText));
 
   renderer.clearScreen();
   renderPage(renderer);
@@ -336,7 +341,7 @@ void TxtReaderActivity::renderStatusBar() const {
   if (SETTINGS.statusBarSpec().showsTitle()) {
     title = txt->getTitle();
   }
-  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
+  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title, 0, 0, true, false, false, timeLeftText);
 }
 
 bool TxtReaderActivity::pageTurn(bool isForward) {
@@ -344,16 +349,10 @@ bool TxtReaderActivity::pageTurn(bool isForward) {
   if (!initialized) {
     return false;
   }
-  if (isForward) {
-    if (currentPage < totalPages) {
-      currentPage++;
-      return true;
-    }
-  } else {
-    if (currentPage > 0) {
-      currentPage--;
-      return true;
-    }
+  if (isForward ? currentPage < totalPages : currentPage > 0) {
+    currentPage += isForward ? 1 : -1;
+    reading_stats::onPageTurn(isForward);
+    return true;
   }
   return false;
 }
