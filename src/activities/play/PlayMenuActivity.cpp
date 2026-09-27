@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "BlackjackActivity.h"
+#include "Connect4Activity.h"
 #include "ConnectionsActivity.h"
 #include "Game2048Activity.h"
 #include "JokersActivity.h"
@@ -53,6 +54,7 @@ constexpr PlayMenuActivity::Entry GAMES[] = {
     {StrId::STR_PLAY_VOXEL, StrId::STR_PLAY_VOXEL_DESC, &glyphs::voxel, &make<VoxelActivity>},
     {StrId::STR_PLAY_SKETCH, StrId::STR_PLAY_SKETCH_DESC, &glyphs::sketch, &make<SketchActivity>},
     {StrId::STR_PLAY_XKCD, StrId::STR_PLAY_XKCD_DESC, &XkcdActivity::drawMenuIcon, &make<XkcdActivity>},
+    {StrId::STR_PLAY_CONNECT4, StrId::STR_PLAY_CONNECT4_DESC, &Connect4Activity::drawMenuIcon, &make<Connect4Activity>},
 };
 constexpr int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 
