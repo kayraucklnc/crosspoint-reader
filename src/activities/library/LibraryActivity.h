@@ -19,7 +19,8 @@
 //   Confirm           details card (hold: open the book right away)
 //   Back              Home
 //
-// In the top bar Left/Right pick Shelf | Grid | List | Sort | Filter | Search,
+// In the top bar Left/Right pick Shelf | Grid | List | Sort | Filter |
+// Get Books | Search,
 // Confirm applies, Back or side Down returns to the books. The details card
 // offers Open / Mark finished / Archive; side buttons step through books.
 //
@@ -42,7 +43,7 @@ class LibraryActivity final : public Activity {
 
  private:
   enum class Zone : uint8_t { Books, Bar };
-  enum BarItem : uint8_t { BAR_SHELF, BAR_GRID, BAR_LIST, BAR_SORT, BAR_FILTER, BAR_SEARCH, BAR_COUNT };
+  enum BarItem : uint8_t { BAR_SHELF, BAR_GRID, BAR_LIST, BAR_SORT, BAR_FILTER, BAR_GET_BOOKS, BAR_SEARCH, BAR_COUNT };
   enum CardAction : uint8_t { ACTION_OPEN, ACTION_FINISHED, ACTION_ARCHIVE, ACTION_COUNT };
 
   // One book on the current page.

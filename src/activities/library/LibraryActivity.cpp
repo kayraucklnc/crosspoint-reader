@@ -5,6 +5,7 @@
 #include <I18n.h>
 #include <LibraryBuilder.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <OrderedDither.h>
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include "LibraryMetaStore.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "activities/browser/GetBooksActivity.h"
 #include "components/GeneratedCover.h"
 #include "components/UITheme.h"
 #include "util/BookProgress.h"
@@ -351,6 +353,12 @@ void LibraryActivity::handleBarConfirm() {
     case BAR_SEARCH:
       index.close();
       activityManager.goToLibraryList();
+      return;
+    case BAR_GET_BOOKS:
+      index.close();
+      if (auto getBooks = makeUniqueNoThrow<GetBooksActivity>(renderer, mappedInput)) {
+        activityManager.replaceActivity(std::move(getBooks));
+      }
       return;
     default:
       break;

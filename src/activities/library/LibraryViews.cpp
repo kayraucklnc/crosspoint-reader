@@ -77,6 +77,14 @@ void glyphSearch(const GfxRenderer& r, const int x, const int y, const bool blac
   r.drawRoundedRect(x, y, 10, 10, 2, 5, black);
   r.drawLine(x + 9, y + 9, x + 13, y + 13, 2, black);
 }
+// Arrow into a tray: Get Books.
+void glyphGetBooks(const GfxRenderer& r, const int x, const int y, const bool black) {
+  r.fillRect(x + 6, y, 3, 8, black);
+  const int xs[] = {x + 2, x + 13, x + 7};
+  const int ys[] = {y + 7, y + 7, y + 12};
+  r.fillPolygon(xs, ys, 3, black);
+  r.fillRect(x, y + 13, 15, 2, black);
+}
 }  // namespace
 
 int LibraryActivity::contentTop() const { return layout::HEADER_HEIGHT + 4; }
@@ -104,6 +112,7 @@ void LibraryActivity::drawBarItem(const int item, const int x, const int y, cons
   if (item == BAR_SORT) glyphSort(renderer, tx - glyph, gy, !active);
   if (item == BAR_FILTER) glyphFilter(renderer, tx - glyph, gy, !active);
   if (item == BAR_SEARCH) glyphSearch(renderer, tx - glyph, gy, !active);
+  if (item == BAR_GET_BOOKS) glyphGetBooks(renderer, tx - glyph, gy, !active);
   if (label[0]) {
     renderer.drawText(UI_10_FONT_ID, tx, y + (h - renderer.getLineHeight(UI_10_FONT_ID)) / 2, label, !active,
                       EpdFontFamily::BOLD);
@@ -149,6 +158,7 @@ void LibraryActivity::drawHeader() const {
   drawBarItem(BAR_FILTER, x, BAR_Y, chipWidth(filterLabel(filter)), BAR_H, filterLabel(filter), false);
   // Search is a glyph-only square: the row must fit "Progress" and "Archived".
   drawBarItem(BAR_SEARCH, w - 16 - BAR_H, BAR_Y, BAR_H, BAR_H, "", false);
+  drawBarItem(BAR_GET_BOOKS, w - 24 - 2 * BAR_H, BAR_Y, BAR_H, BAR_H, "", false);
   renderer.fillRect(16, layout::HEADER_HEIGHT - 3, w - 32, 1, true);
 }
 
@@ -427,6 +437,7 @@ void LibraryActivity::drawHints() const {
     back = tr(STR_LIB_BOOKS);
     confirm =
         barFocus == BAR_SEARCH ? tr(STR_LIBRARY_SEARCH) : (barFocus <= BAR_LIST ? tr(STR_SELECT) : tr(STR_LIB_CHANGE));
+    if (barFocus == BAR_GET_BOOKS) confirm = tr(STR_GET_BOOKS);
     down = tr(STR_LIB_BOOKS);
   } else {
     back = tr(STR_HOME_SHORTCUT);
