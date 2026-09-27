@@ -297,6 +297,11 @@ void XkcdActivity::saveState() const {
 
 // --- input -----------------------------------------------------------------------
 
+void XkcdActivity::requestRandom() {
+  const int top = std::max<int>(latest, comic.num);
+  if (top > 0) request(1 + static_cast<int>(random(top)), +1);
+}
+
 void XkcdActivity::loop() {
   if (waitingForWifi) return;
   if (loading) {
@@ -322,10 +327,14 @@ void XkcdActivity::loop() {
   } else if (mappedInput.wasReleased(Button::Left)) {
     if (comic.num > 1) request(comic.num - 1, -1);
   } else if (mappedInput.wasReleased(Button::Right)) {
-    if (latest == 0 || comic.num < latest) request(comic.num + 1, +1);
+    // At the newest comic there is no "next", so Right rolls a random one instead.
+    if (latest == 0 || comic.num < latest) {
+      request(comic.num + 1, +1);
+    } else {
+      requestRandom();
+    }
   } else if (mappedInput.wasReleased(Button::Up)) {
-    const int top = std::max<int>(latest, comic.num);
-    request(1 + static_cast<int>(random(top)), +1);
+    requestRandom();
   } else if (mappedInput.wasReleased(Button::Down)) {
     request(0, 0);
   }

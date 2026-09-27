@@ -66,6 +66,8 @@ class XkcdActivity final : public Activity {
   GfxRenderer::Orientation drawnOrientation = GfxRenderer::Orientation::Portrait;
   bool firstFrame = true;
 
+  void requestRandom();
+
   void request(int num, int step);
   void runLoad();
   bool ensureWifi();

@@ -138,7 +138,7 @@ void XkcdActivity::drawHints() const {
     return;
   }
   const char* prev = comic.num > 1 ? tr(STR_XKCD_PREV) : "";
-  const char* next = latest == 0 || comic.num < latest ? tr(STR_XKCD_NEXT) : "";
+  const char* next = latest == 0 || comic.num < latest ? tr(STR_XKCD_NEXT) : tr(STR_XKCD_RANDOM);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), showAlt ? tr(STR_XKCD_COMIC) : tr(STR_XKCD_ALT), prev, next);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   // The side tabs have no free edge once the layout is turned.
