@@ -28,4 +28,4 @@ find "$VOL" -name '._*' -delete 2>/dev/null || true
 
 DISK="$(diskutil info "$VOL" | awk -F': *' '/Part of Whole/{print $2}')"
 echo "Staged $(du -h "$VOL/update.bin" | cut -f1) update.bin on $VOL (disk: $DISK)"
-diskutil eject "$DISK"
+[[ -n "${NO_EJECT:-}" ]] || diskutil eject "$DISK"
