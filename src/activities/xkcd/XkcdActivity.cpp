@@ -1,78 +1,39 @@
 #include "XkcdActivity.h"
 
 #include <Arduino.h>
-#include <ArduinoJson.h>
-#include <Epub/converters/JpegToFramebufferConverter.h>
-#include <Epub/converters/PngToFramebufferConverter.h>
 #include <HalStorage.h>
 #include <Logging.h>
-#include <Memory.h>
-#include <WiFi.h>
 
 #include <algorithm>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
-#include "WifiCredentialStore.h"
-#include "activities/network/WifiSelectionActivity.h"
+#include "XkcdCache.h"
 #include "components/UITheme.h"
-#include "network/HttpDownloader.h"
-#include "network/WifiAutoConnect.h"
 
 using Button = MappedInputManager::Button;
 
 namespace {
-constexpr char CACHE_DIR[] = "/.crosspoint/xkcd";
-constexpr char STATE_PATH[] = "/.crosspoint/xkcd/state.json";
-constexpr size_t MAX_CACHED = 30;
-// xkcd.com has never published #404.
-constexpr int MISSING_COMIC = 404;
 // Landscape only when it makes the comic clearly bigger.
 constexpr float LANDSCAPE_GAIN = 1.15f;
-
-std::string metaPath(const int num) {
-  char path[48];
-  snprintf(path, sizeof(path), "%s/%d.json", CACHE_DIR, num);
-  return path;
-}
-
-// ".png" / ".jpg" from an image URL; empty for formats the decoders lack (gif).
-const char* imageExtension(const char* url) {
-  const char* dot = strrchr(url, '.');
-  if (!dot) return "";
-  if (strcasecmp(dot, ".png") == 0) return ".png";
-  if (strcasecmp(dot, ".jpg") == 0 || strcasecmp(dot, ".jpeg") == 0) return ".jpg";
-  return "";
-}
-
-std::string imagePath(const int num, const char* extension) {
-  char path[48];
-  snprintf(path, sizeof(path), "%s/%d%s", CACHE_DIR, num, extension);
-  return path;
-}
-
-bool imageSize(const std::string& path, int16_t& width, int16_t& height) {
-  ImageDimensions dims{};
-  const bool ok = path.size() > 4 && path.compare(path.size() - 4, 4, ".png") == 0
-                      ? PngToFramebufferConverter::getDimensionsStatic(path, dims)
-                      : JpegToFramebufferConverter::getDimensionsStatic(path, dims);
-  if (!ok || dims.width <= 0 || dims.height <= 0) return false;
-  width = dims.width;
-  height = dims.height;
-  return true;
-}
 }  // namespace
 
 void XkcdActivity::onEnter() {
   Activity::onEnter();
   savedOrientation = renderer.getOrientation();
   drawnOrientation = savedOrientation;
-  if (!Storage.exists(CACHE_DIR)) Storage.mkdir(CACHE_DIR);
+  if (!Storage.exists(xkcd_cache::DIR)) Storage.mkdir(xkcd_cache::DIR);
+  const unsigned long started = millis();
+  pack.open();
   loadState();
-  request(0, 0);
+  const int start = lastViewed > 0 && show(lastViewed) ? lastViewed : newestAvailable();
+  if (!haveComic && start > 0) show(start);
+  LOG_INF("XKCD", "Opened at #%u in %lu ms (heap %u free, %u max block)", comic.num, millis() - started,
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  // Nothing on the card yet: fetch the latest comics rather than show an empty screen.
+  if (!haveComic) startCheck();
+  requestUpdate();
 }
 
 void XkcdActivity::onExit() {
@@ -81,164 +42,118 @@ void XkcdActivity::onExit() {
   saveState();
   // Like every Wi-Fi activity: reboot to reclaim the heap TLS fragmented.
   if (wifiUsed) {
-    WiFi.disconnect(false);
-    delay(30);
+    stopWifi();
     silentRestart();
   }
 }
 
-// --- loading ---------------------------------------------------------------------
+// --- browsing --------------------------------------------------------------------
 
-void XkcdActivity::request(const int num, const int step) {
-  target = num;
-  direction = step;
-  loading = true;
-  requestUpdate();
-}
-
-bool XkcdActivity::ensureWifi() {
-  if (WiFi.status() == WL_CONNECTED) return true;
-  {
-    // Credentials load lazily; SD shares the SPI bus with the display.
-    RenderLock lock(*this);
-    WIFI_STORE.loadFromFile();
+bool XkcdActivity::show(const int num) {
+  if (num <= 0) return false;
+  const int32_t index = pack.find(static_cast<uint16_t>(num));
+  const bool ok = index >= 0 ? loadFromPack(index) : loadCached(num);
+  if (ok) {
+    lastViewed = comic.num;
+    checkResult = -1;
+    netError = NetError::None;
   }
-  wifiUsed = true;
-  return wifi_auto_connect::connect() == wifi_auto_connect::Result::CONNECTED;
+  return ok;
 }
 
-// Draws the status popup, then blocks on the card or the network.
-void XkcdActivity::runLoad() {
-  requestUpdateAndWait();
-  int num = target;
-  if (num == MISSING_COMIC) num += direction < 0 ? -1 : 1;
-
-  bool ok = num > 0 && loadCached(num);
-  if (!ok) {
-    if (ensureWifi()) {
-      ok = fetch(num);
-    } else if (!haveComic && recent.empty()) {
-      // Nothing to show offline: let the user pick a network.
-      waitingForWifi = true;
-      auto picker = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, false);
-      if (picker) {
-        startActivityForResult(std::move(picker), [this](const ActivityResult& result) {
-          waitingForWifi = false;
-          if (result.isCancelled || WiFi.status() != WL_CONNECTED) {
-            loading = false;
-            failed = true;
-          }
-        });
-        return;
-      }
-      waitingForWifi = false;
-      LOG_ERR("XKCD", "OOM: Wi-Fi picker");
-    }
-    if (!ok && !haveComic && !recent.empty()) {
-      // Offline: fall back to the last comic on the card.
-      ok = loadCached(recent.front());
-      offline = ok;
-    } else if (!ok && haveComic) {
-      offline = true;
-    }
+bool XkcdActivity::loadFromPack(const int32_t index) {
+  const unsigned long started = millis();
+  Comic next;
+  if (!pack.entryAt(static_cast<uint32_t>(index), next.packEntry) ||
+      !pack.readText(next.packEntry, next.title, next.alt)) {
+    LOG_ERR("XKCD", "Pack record %d unreadable", static_cast<int>(index));
+    return false;
   }
-  failed = !ok && !haveComic;
-  loading = false;
-  requestUpdate();
-}
-
-bool XkcdActivity::readMeta(const std::string& json, Comic& out) const {
-  JsonDocument doc;
-  if (deserializeJson(doc, json)) return false;
-  out.num = doc["num"] | 0;
-  out.title = doc["safe_title"] | "";
-  out.alt = doc["alt"] | "";
-  out.year = static_cast<uint16_t>(atoi(doc["year"] | "0"));
-  out.month = static_cast<uint8_t>(atoi(doc["month"] | "0"));
-  out.day = static_cast<uint8_t>(atoi(doc["day"] | "0"));
-  const char* extension = imageExtension(doc["img"] | "");
-  out.imagePath = extension[0] ? imagePath(out.num, extension) : std::string();
-  return out.num > 0;
+  const XkcdPack::Entry& entry = next.packEntry;
+  next.num = entry.num;
+  next.year = entry.year;
+  next.month = entry.month;
+  next.day = entry.day;
+  next.fromPack = true;
+  RenderLock lock(*this);
+  comic = std::move(next);
+  haveComic = true;
+  showAlt = false;
+  landscape = comic.packEntry.landscape;
+  LOG_DBG("XKCD", "Pack #%u (%ux%u%s) looked up in %lu ms", comic.num, entry.width, entry.height,
+          landscape ? ", landscape" : "", millis() - started);
+  return true;
 }
 
 bool XkcdActivity::loadCached(const int num) {
-  const std::string path = metaPath(num);
-  if (!Storage.exists(path.c_str())) return false;
+  if (!std::binary_search(cached.begin(), cached.end(), static_cast<uint16_t>(num))) return false;
+  const std::string path = xkcd_cache::metaPath(num);
+  xkcd_cache::Meta meta;
+  if (!xkcd_cache::parseMeta(Storage.readFile(path.c_str()).c_str(), meta)) return false;
   Comic next;
-  if (!readMeta(Storage.readFile(path.c_str()).c_str(), next)) return false;
-  if (!next.imagePath.empty() &&
-      (!Storage.exists(next.imagePath.c_str()) || !imageSize(next.imagePath, next.width, next.height))) {
-    return false;
+  next.num = meta.num;
+  next.year = meta.year;
+  next.month = meta.month;
+  next.day = meta.day;
+  next.title = std::move(meta.title);
+  next.alt = std::move(meta.alt);
+  next.imagePath = std::move(meta.imagePath);
+  if (!next.imagePath.empty() && !xkcd_cache::imageSize(next.imagePath, next.width, next.height)) {
+    LOG_ERR("XKCD", "Cached image unreadable: %s", next.imagePath.c_str());
+    next.imagePath.clear();
   }
-  {
-    RenderLock lock(*this);
-    comic = std::move(next);
-    haveComic = true;
-    showAlt = false;
-    offline = false;
-    chooseOrientation();
-  }
-  remember(comic.num);
+  RenderLock lock(*this);
+  comic = std::move(next);
+  haveComic = true;
+  showAlt = false;
+  chooseOrientation();
   return true;
 }
 
-bool XkcdActivity::fetch(const int num) {
-  char url[48];
-  if (num > 0) {
-    snprintf(url, sizeof(url), "https://xkcd.com/%d/info.0.json", num);
+// Nearest available comic after (direction > 0) or before `num`, 0 if none.
+int XkcdActivity::neighbour(const int num, const int direction) const {
+  int best = 0;
+  if (direction > 0) {
+    XkcdPack::Entry entry;
+    const uint32_t index = pack.lowerBound(static_cast<uint16_t>(num + 1));
+    if (pack.entryAt(index, entry)) best = entry.num;
+    const auto it = std::upper_bound(cached.begin(), cached.end(), static_cast<uint16_t>(num));
+    if (it != cached.end() && (best == 0 || *it < best)) best = *it;
   } else {
-    snprintf(url, sizeof(url), "https://xkcd.com/info.0.json");
+    XkcdPack::Entry entry;
+    const uint32_t index = pack.lowerBound(static_cast<uint16_t>(num));
+    if (index > 0 && pack.entryAt(index - 1, entry)) best = entry.num;
+    const auto it = std::lower_bound(cached.begin(), cached.end(), static_cast<uint16_t>(num));
+    if (it != cached.begin() && *(it - 1) > best) best = *(it - 1);
   }
-  std::string body;
-  if (!HttpDownloader::fetchUrl(url, body)) {
-    LOG_ERR("XKCD", "Fetch failed: %s", url);
-    return false;
-  }
-
-  // Keep only what the reader shows; old comics carry kilobytes of transcript.
-  JsonDocument doc;
-  {
-    JsonDocument filter;
-    for (const char* key : {"num", "safe_title", "alt", "img", "year", "month", "day"}) filter[key] = true;
-    if (deserializeJson(doc, body, DeserializationOption::Filter(filter))) {
-      LOG_ERR("XKCD", "Bad JSON for %s", url);
-      return false;
-    }
-  }
-  std::string meta;
-  serializeJson(doc, meta);
-  std::string().swap(body);
-
-  Comic next;
-  if (!readMeta(meta, next)) return false;
-  if (num == 0) latest = next.num;
-  if (next.num > latest) latest = next.num;
-
-  if (!next.imagePath.empty()) {
-    const char* img = doc["img"] | "";
-    if (HttpDownloader::downloadToFile(img, next.imagePath) != HttpDownloader::OK ||
-        !imageSize(next.imagePath, next.width, next.height)) {
-      LOG_ERR("XKCD", "Image failed: %s", img);
-      Storage.remove(next.imagePath.c_str());
-      return false;
-    }
-  }
-  Storage.writeFile(metaPath(next.num).c_str(), meta.c_str());
-
-  {
-    RenderLock lock(*this);
-    comic = std::move(next);
-    haveComic = true;
-    showAlt = false;
-    offline = false;
-    chooseOrientation();
-  }
-  remember(comic.num);
-  return true;
+  return best;
 }
 
-// Picks the orientation that shows the comic larger; the header strip and the
-// button hints take the same room either way.
+int XkcdActivity::newestAvailable() const {
+  const int cachedTop = cached.empty() ? 0 : cached.back();
+  return std::max<int>(pack.maxNum(), cachedTop);
+}
+
+bool XkcdActivity::atNewest() const { return haveComic && comic.num >= newestAvailable(); }
+
+// Uniform over every comic on the card: the pack, then cached ones beyond it.
+void XkcdActivity::showRandom() {
+  const auto newer = std::upper_bound(cached.begin(), cached.end(), pack.maxNum());
+  const uint32_t extra = static_cast<uint32_t>(cached.end() - newer);
+  const uint32_t total = pack.count() + extra;
+  if (total == 0) return;
+  const uint32_t pick = static_cast<uint32_t>(random(static_cast<long>(total)));
+  const bool ok =
+      pick < pack.count() ? loadFromPack(static_cast<int32_t>(pick)) : loadCached(*(newer + (pick - pack.count())));
+  if (ok) {
+    lastViewed = comic.num;
+    checkResult = -1;
+    netError = NetError::None;
+  }
+}
+
+// Picks the orientation that shows an online comic larger; the header strip
+// and the button hints take the same room either way.
 void XkcdActivity::chooseOrientation() {
   if (comic.width <= 0 || comic.height <= 0) {
     landscape = false;
@@ -254,58 +169,12 @@ void XkcdActivity::chooseOrientation() {
   landscape = std::min(wide, MAX_UPSCALE) > std::min(portrait, MAX_UPSCALE) * LANDSCAPE_GAIN;
 }
 
-// Most recently viewed first; the oldest beyond MAX_CACHED leave the card.
-void XkcdActivity::remember(const uint16_t num) {
-  recent.erase(std::remove(recent.begin(), recent.end(), num), recent.end());
-  recent.insert(recent.begin(), num);
-  while (recent.size() > MAX_CACHED) {
-    const int old = recent.back();
-    recent.pop_back();
-    Comic stale;
-    const std::string meta = metaPath(old);
-    if (readMeta(Storage.readFile(meta.c_str()).c_str(), stale) && !stale.imagePath.empty()) {
-      Storage.remove(stale.imagePath.c_str());
-    }
-    Storage.remove(meta.c_str());
-  }
-  saveState();
-}
-
-void XkcdActivity::loadState() {
-  recent.clear();
-  recent.reserve(MAX_CACHED + 1);
-  if (!Storage.exists(STATE_PATH)) return;
-  JsonDocument doc;
-  if (deserializeJson(doc, Storage.readFile(STATE_PATH).c_str())) return;
-  latest = doc["latest"] | 0;
-  for (const JsonVariantConst num : doc["recent"].as<JsonArrayConst>()) {
-    if (recent.size() >= MAX_CACHED) break;
-    const int value = num | 0;
-    if (value > 0) recent.push_back(static_cast<uint16_t>(value));
-  }
-}
-
-void XkcdActivity::saveState() const {
-  JsonDocument doc;
-  doc["latest"] = latest;
-  JsonArray list = doc["recent"].to<JsonArray>();
-  for (const uint16_t num : recent) list.add(num);
-  std::string out;
-  serializeJson(doc, out);
-  Storage.writeFile(STATE_PATH, out.c_str());
-}
-
 // --- input -----------------------------------------------------------------------
-
-void XkcdActivity::requestRandom() {
-  const int top = std::max<int>(latest, comic.num);
-  if (top > 0) request(1 + static_cast<int>(random(top)), +1);
-}
 
 void XkcdActivity::loop() {
   if (waitingForWifi) return;
-  if (loading) {
-    runLoad();
+  if (checking) {
+    runCheck();
     return;
   }
   if (mappedInput.wasReleased(Button::Back)) {
@@ -318,24 +187,34 @@ void XkcdActivity::loop() {
     return;
   }
   if (!haveComic) {
-    if (mappedInput.wasReleased(Button::Confirm)) request(0, 0);
+    if (mappedInput.wasReleased(Button::Confirm)) startCheck();
     return;
   }
+  bool moved = false;
   if (mappedInput.wasReleased(Button::Confirm)) {
     showAlt = !showAlt;
     requestUpdate();
   } else if (mappedInput.wasReleased(Button::Left)) {
-    if (comic.num > 1) request(comic.num - 1, -1);
+    const int prev = neighbour(comic.num, -1);
+    moved = prev > 0 && show(prev);
   } else if (mappedInput.wasReleased(Button::Right)) {
     // At the newest comic there is no "next", so Right rolls a random one instead.
-    if (latest == 0 || comic.num < latest) {
-      request(comic.num + 1, +1);
+    const int next = neighbour(comic.num, +1);
+    if (next > 0) {
+      moved = show(next);
     } else {
-      requestRandom();
+      showRandom();
+      moved = true;
     }
   } else if (mappedInput.wasReleased(Button::Up)) {
-    requestRandom();
+    showRandom();
+    moved = true;
   } else if (mappedInput.wasReleased(Button::Down)) {
-    request(0, 0);
+    if (atNewest()) {
+      startCheck();
+    } else {
+      moved = show(newestAvailable());
+    }
   }
+  if (moved) requestUpdate();
 }

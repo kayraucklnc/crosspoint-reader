@@ -1,6 +1,8 @@
+#include <Arduino.h>
 #include <Epub/converters/JpegToFramebufferConverter.h>
 #include <Epub/converters/PngToFramebufferConverter.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -30,9 +32,15 @@ void XkcdActivity::drawMenuIcon(const GfxRenderer& renderer, const int x, const 
 }
 
 void XkcdActivity::render(RenderLock&&) {
-  if (loading) {
+  if (checking) {
     // Over the frame already on the panel: one quick refresh.
-    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+    char text[48];
+    if (fetchingNum > 0) {
+      snprintf(text, sizeof(text), tr(STR_XKCD_DOWNLOADING), fetchingNum);
+    } else {
+      snprintf(text, sizeof(text), "%s", tr(STR_XKCD_CHECKING));
+    }
+    GUI.drawPopup(renderer, text);
     return;
   }
   const auto orientation =
@@ -52,35 +60,86 @@ void XkcdActivity::render(RenderLock&&) {
   renderer.displayBuffer(turned ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }
 
+// Header text on the right: the last check's outcome, else the comic's date.
+const char* XkcdActivity::statusText(char* buffer, const size_t size) const {
+  switch (netError) {
+    case NetError::NoWifi:
+      return tr(STR_XKCD_ERR_WIFI);
+    case NetError::LowMemory:
+      return tr(STR_XKCD_ERR_MEMORY);
+    case NetError::Server:
+      snprintf(buffer, size, tr(STR_XKCD_ERR_SERVER), netStatus);
+      return buffer;
+    case NetError::Network:
+      return tr(STR_XKCD_OFFLINE);
+    case NetError::SdCard:
+      return tr(STR_XKCD_ERR_STORAGE);
+    case NetError::BadData:
+      return tr(STR_XKCD_ERR_DATA);
+    case NetError::None:
+      break;
+  }
+  if (checkResult == 0) return tr(STR_XKCD_UP_TO_DATE);
+  if (checkResult > 0) {
+    snprintf(buffer, size, tr(STR_XKCD_NEW_COUNT), checkResult);
+    return buffer;
+  }
+  if (comic.year == 0) return "";
+  snprintf(buffer, size, "%04u-%02u-%02u", comic.year, comic.month, comic.day);
+  return buffer;
+}
+
 void XkcdActivity::drawComic() {
   const Rect area = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const int left = area.x + SIDE;
   const int right = area.x + area.width - SIDE;
 
-  // Header: number and title on the left, date on the right.
-  char date[16] = "";
-  if (comic.year > 0) snprintf(date, sizeof(date), "%04u-%02u-%02u", comic.year, comic.month, comic.day);
+  // Header: number and title on the left, date (or check status) on the right.
+  char statusBuffer[48];
+  const char* status = statusText(statusBuffer, sizeof(statusBuffer));
   char number[12];
   snprintf(number, sizeof(number), "#%u", comic.num);
-  const int dateWidth = date[0] ? renderer.getTextWidth(UI_10_FONT_ID, date) : 0;
+  const int statusWidth = status[0] ? renderer.getTextWidth(UI_10_FONT_ID, status) : 0;
   const int numberWidth = renderer.getTextWidth(UI_12_FONT_ID, number, EpdFontFamily::BOLD);
   renderer.drawText(UI_12_FONT_ID, left, 6, number, true, EpdFontFamily::BOLD);
-  const std::string title = renderer.truncatedText(UI_12_FONT_ID, comic.title.c_str(),
-                                                   right - left - numberWidth - dateWidth - 28, EpdFontFamily::REGULAR);
+  const std::string title = renderer.truncatedText(
+      UI_12_FONT_ID, comic.title.c_str(), right - left - numberWidth - statusWidth - 28, EpdFontFamily::REGULAR);
   renderer.drawText(UI_12_FONT_ID, left + numberWidth + 10, 6, title.c_str());
-  if (date[0]) renderer.drawText(UI_10_FONT_ID, right - dateWidth, 10, offline ? tr(STR_XKCD_OFFLINE_SHORT) : date);
+  if (status[0]) renderer.drawText(UI_10_FONT_ID, right - statusWidth, 10, status);
   renderer.fillRect(left, HEADER_HEIGHT - 2, right - left, 1, true);
 
   const int top = HEADER_HEIGHT + 4;
   const int bottom = area.y + area.height - 4;
-  if (comic.imagePath.empty() || comic.width <= 0) {
-    renderer.drawCenteredText(UI_10_FONT_ID, top + 20, tr(STR_XKCD_NO_IMAGE));
-    drawAltText(top + 60, bottom);
+  drawImage(top, bottom);
+  if (showAlt) drawAltText(top, bottom);
+}
+
+void XkcdActivity::drawImage(const int top, const int bottom) {
+  const Rect area = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int left = area.x + SIDE;
+  const int boxW = area.width - 2 * SIDE;
+  const int boxH = bottom - top;
+  const unsigned long started = millis();
+
+  if (comic.fromPack) {
+    // Pack images are pre-sized to this box; centre them.
+    const XkcdPack::Entry& entry = comic.packEntry;
+    const int x = left + std::max(0, (boxW - entry.width) / 2);
+    const int y = top + std::max(0, (boxH - entry.height) / 2);
+    if (!pack.draw(entry, renderer, x, y)) {
+      renderer.drawCenteredText(UI_10_FONT_ID, top + 20, tr(STR_XKCD_NO_IMAGE));
+      return;
+    }
+    LOG_DBG("XKCD", "Pack #%u drawn in %lu ms (%u bytes)", comic.num, millis() - started,
+            static_cast<unsigned>(entry.dataSize));
     return;
   }
 
-  const int boxW = right - left;
-  const int boxH = bottom - top;
+  if (comic.imagePath.empty() || comic.width <= 0) {
+    renderer.drawCenteredText(UI_10_FONT_ID, top + 20, tr(STR_XKCD_NO_IMAGE));
+    if (!showAlt) drawAltText(top + 60, bottom);
+    return;
+  }
   const float scale =
       std::min({static_cast<float>(boxW) / comic.width, static_cast<float>(boxH) / comic.height, MAX_UPSCALE});
   const int w = std::max(1, static_cast<int>(comic.width * scale));
@@ -97,8 +156,11 @@ void XkcdActivity::drawComic() {
     JpegToFramebufferConverter decoder;
     drawn = decoder.decodeToFramebuffer(comic.imagePath, renderer, config);
   }
-  if (!drawn) renderer.drawCenteredText(UI_10_FONT_ID, top + 20, tr(STR_XKCD_NO_IMAGE));
-  if (showAlt) drawAltText(top, bottom);
+  if (!drawn) {
+    LOG_ERR("XKCD", "Decode failed for #%u (heap %u free, %u max block)", comic.num,
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    renderer.drawCenteredText(UI_10_FONT_ID, top + 20, tr(STR_XKCD_NO_IMAGE));
+  }
 }
 
 // The alt text as a card over the lower part of the comic.
@@ -125,22 +187,30 @@ void XkcdActivity::drawAltText(const int top, const int bottom) const {
 void XkcdActivity::drawMessage() const {
   const int mid = renderer.getScreenHeight() / 2;
   renderer.drawText(UI_12_FONT_ID, SIDE + 16, 6, "xkcd", true, EpdFontFamily::BOLD);
-  if (failed) {
-    renderer.drawCenteredText(UI_12_FONT_ID, mid - 30, tr(STR_XKCD_OFFLINE), true, EpdFontFamily::BOLD);
+  if (checking) return;
+  if (netError != NetError::None) {
+    char buffer[48];
+    renderer.drawCenteredText(UI_12_FONT_ID, mid - 30, statusText(buffer, sizeof(buffer)), true, EpdFontFamily::BOLD);
     renderer.drawCenteredText(UI_10_FONT_ID, mid + 6, tr(STR_XKCD_RETRY_HINT));
+  } else {
+    renderer.drawCenteredText(UI_12_FONT_ID, mid - 30, tr(STR_XKCD_EMPTY), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_10_FONT_ID, mid + 6, tr(STR_XKCD_EMPTY_HINT));
   }
 }
 
 void XkcdActivity::drawHints() const {
   if (!haveComic) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), failed ? tr(STR_RETRY) : "", "", "");
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     return;
   }
-  const char* prev = comic.num > 1 ? tr(STR_XKCD_PREV) : "";
-  const char* next = latest == 0 || comic.num < latest ? tr(STR_XKCD_NEXT) : tr(STR_XKCD_RANDOM);
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), showAlt ? tr(STR_XKCD_COMIC) : tr(STR_XKCD_ALT), prev, next);
+  const bool newest = atNewest();
+  const char* next = newest ? tr(STR_XKCD_RANDOM) : tr(STR_XKCD_NEXT);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), showAlt ? tr(STR_XKCD_COMIC) : tr(STR_XKCD_ALT),
+                                            comic.num > 1 ? tr(STR_XKCD_PREV) : "", next);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   // The side tabs have no free edge once the layout is turned.
-  if (!landscape) GUI.drawSideButtonHints(renderer, tr(STR_XKCD_RANDOM), tr(STR_XKCD_LATEST));
+  if (!landscape) {
+    GUI.drawSideButtonHints(renderer, tr(STR_XKCD_RANDOM), newest ? tr(STR_XKCD_CHECK_NEW) : tr(STR_XKCD_LATEST));
+  }
 }
