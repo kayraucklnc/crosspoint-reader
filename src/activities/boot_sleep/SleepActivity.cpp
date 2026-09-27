@@ -25,12 +25,12 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#include "util/WallpaperStore.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
+#include "util/WallpaperStore.h"
 
 namespace {
 
@@ -493,6 +493,22 @@ bool drawSleepPopupPreservingFrame(GfxRenderer& renderer) {
   return true;
 }
 
+// Puts a 50% checkerboard of black dots over the displayed page (1 = white in
+// the framebuffer) and shows it with a single fast refresh. A checkerboard is
+// rotation-invariant, so the physical buffer is masked directly in any orientation.
+void showDimmedFrame(const GfxRenderer& renderer) {
+  uint8_t* frameBuffer = renderer.getFrameBuffer();
+  if (frameBuffer == nullptr) return;
+  const size_t rowBytes = renderer.getDisplayWidthBytes();
+  const size_t rows = renderer.getBufferSize() / rowBytes;
+  for (size_t row = 0; row < rows; row++) {
+    const uint8_t keep = (row & 1) ? 0x55 : 0xAA;
+    uint8_t* line = frameBuffer + row * rowBytes;
+    for (size_t i = 0; i < rowBytes; i++) line[i] &= keep;
+  }
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
 void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
   if (auto* fcm = renderer.getFontCacheManager()) {
     LOG_DBG("SLP", "Free heap before SD font cache release: %d bytes", ESP.getFreeHeap());
@@ -535,19 +551,26 @@ void SleepActivity::onEnter() {
     // output-level inversion first so the retained content keeps its visible
     // polarity after the display driver returns to normal.
     if (frameWasInverted) renderer.invertScreen();
-    if (APP_STATE.lastSleepFromReader) {
-      ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-    }
-    drawSleepPopupPreservingFrame(renderer);
-    if (APP_STATE.lastSleepFromReader) {
-      renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+    // The overlay is drawn over the page itself, so there is nothing to dim.
+    if (SETTINGS.sleepTransition == CrossPointSettings::SLEEP_TRANSITION_OFF) {
+      if (APP_STATE.lastSleepFromReader) {
+        ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+      }
+      drawSleepPopupPreservingFrame(renderer);
+      if (APP_STATE.lastSleepFromReader) {
+        renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+      }
     }
     releaseSdFontCachesForDecode(renderer);
     return renderTransparentCustomSleepScreen();
   }
 
-  // Show popup with reader orientation only when going to sleep from reader
-  if (APP_STATE.lastSleepFromReader) {
+  if (SETTINGS.sleepTransition == CrossPointSettings::SLEEP_TRANSITION_DIM) {
+    // Dim what the user sees: fold a night-mode inversion into the buffer first.
+    if (frameWasInverted) renderer.invertScreen();
+    showDimmedFrame(renderer);
+  } else if (APP_STATE.lastSleepFromReader) {
+    // Show popup with reader orientation only when going to sleep from reader
     ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
     GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
     renderer.setOrientation(GfxRenderer::Orientation::Portrait);
