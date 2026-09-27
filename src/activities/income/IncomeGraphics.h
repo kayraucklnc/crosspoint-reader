@@ -1,5 +1,7 @@
 #pragma once
 
+#include <EpdFontFamily.h>
+
 #include <cstdint>
 
 class GfxRenderer;
@@ -25,9 +27,10 @@ int trackedLabelWidth(const GfxRenderer& renderer, int fontId, const char* text,
 int drawStepStatus(const GfxRenderer& renderer, int x, int y, int width, bool alignRight, int currentStep,
                    const char* label);
 
-// Greedy word wrap into up to maxLines lines of maxWidth; the last line is
-// truncated with "..." if text remains. Returns the number of lines written.
-int wrapText(const GfxRenderer& renderer, int fontId, const char* text, int maxWidth, char (*lines)[96], int maxLines);
+// Greedy word wrap into up to maxLines lines of maxWidth, measured in `style`; the last
+// line is truncated with "..." if text remains. Returns the number of lines written.
+int wrapText(const GfxRenderer& renderer, int fontId, const char* text, int maxWidth, char (*lines)[96], int maxLines,
+             EpdFontFamily::Style style = EpdFontFamily::REGULAR);
 
 // Whole dollars with thousands separators ("$1,234"), cents dropped (rounded toward zero).
 void formatUsd(int64_t cents, char* buf, int bufSize);

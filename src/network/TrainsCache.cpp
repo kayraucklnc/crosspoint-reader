@@ -7,7 +7,9 @@
 #include <cstdio>
 
 namespace {
-constexpr int CACHE_VERSION = 1;
+// v2: departures carry a disruption kind ("k") and note ("m") instead of v1's cancelled flag ("x").
+constexpr int CACHE_VERSION = 2;
+constexpr int CACHE_VERSION_V1 = 1;
 
 void writeBoard(JsonObject obj, const trenord::Board& board) {
   obj["origin"] = board.origin;
@@ -19,12 +21,20 @@ void writeBoard(JsonObject obj, const trenord::Board& board) {
     JsonObject o = deps.add<JsonObject>();
     o["t"] = static_cast<int64_t>(d.scheduled);
     o["d"] = d.delayMin;
-    o["x"] = d.cancelled;
+    o["k"] = static_cast<int>(d.disruption);
+    if (d.note[0]) o["m"] = d.note;
     o["c"] = d.category;
     o["n"] = d.number;
     o["to"] = d.direction;
     o["p"] = d.platform;
   }
+}
+
+trenord::Disruption readDisruption(JsonObjectConst o) {
+  if (o["x"] | false) return trenord::Disruption::CANCELLED;  // v1
+  const int kind = o["k"] | 0;
+  if (kind < 0 || kind > static_cast<int>(trenord::Disruption::CANCELLED)) return trenord::Disruption::NONE;
+  return static_cast<trenord::Disruption>(kind);
 }
 
 bool readBoard(JsonObjectConst obj, trenord::Board& board) {
@@ -43,11 +53,12 @@ bool readBoard(JsonObjectConst obj, trenord::Board& board) {
     trenord::Departure& d = board.departures[board.count++];
     d.scheduled = o["t"] | static_cast<int64_t>(0);
     d.delayMin = o["d"] | trenord::DELAY_UNKNOWN;
-    d.cancelled = o["x"] | false;
+    d.disruption = readDisruption(o);
     snprintf(d.category, sizeof(d.category), "%s", o["c"] | "");
     snprintf(d.number, sizeof(d.number), "%s", o["n"] | "");
     snprintf(d.direction, sizeof(d.direction), "%s", o["to"] | "");
     snprintf(d.platform, sizeof(d.platform), "%s", o["p"] | "");
+    snprintf(d.note, sizeof(d.note), "%s", o["m"] | "");
   }
   return true;
 }
@@ -58,7 +69,9 @@ bool TrainsCache::load() {
   if (!Storage.exists(PATH)) return false;
   const String raw = Storage.readFile(PATH);
   JsonDocument doc;
-  if (deserializeJson(doc, raw.c_str()) != DeserializationError::Ok || doc["v"] != CACHE_VERSION) {
+  const bool parsed = deserializeJson(doc, raw.c_str()) == DeserializationError::Ok;
+  const int version = doc["v"] | 0;
+  if (!parsed || (version != CACHE_VERSION && version != CACHE_VERSION_V1)) {
     LOG_ERR("TRAIN", "Ignoring unreadable %s", PATH);
     return false;
   }

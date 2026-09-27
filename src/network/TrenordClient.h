@@ -36,14 +36,30 @@ constexpr int DEFAULT_TOWARDS = 1;  // Villapizzone: the city-centre direction f
 
 constexpr int16_t DELAY_UNKNOWN = -1000;
 
+// What the train's own alerts (and per-stop cancellations) mean for this trip,
+// in rising severity; a departure keeps the most severe one.
+enum class Disruption : uint8_t {
+  NONE,
+  NOTICE,     // an informational alert on this train
+  DELAY,      // an alert about delays
+  BUS,        // replaced by bus on (part of) its run
+  PARTIAL,    // cancelled elsewhere on its run; still runs between your stations
+  CANCELLED,  // does not run between your stations
+};
+
 struct Departure {
   time_t scheduled = 0;             // UTC
   int16_t delayMin = DELAY_UNKNOWN;  // live delay; DELAY_UNKNOWN before the live window
-  bool cancelled = false;
+  Disruption disruption = Disruption::NONE;
   char category[8] = {};   // "S5", "RE", "MXP"
   char number[8] = {};     // "24539"
   char direction[28] = {};  // final destination of the train
   char platform[6] = {};
+  // Alert detail as Trenord words it: the cancelled stretch and reason
+  // ("TREVIGLIO-PIOLTELLO LIMITO (Forza Maggiore)") or the alert message.
+  char note[48] = {};
+
+  bool cancelled() const { return disruption == Disruption::CANCELLED; }
 };
 
 struct Board {
@@ -57,8 +73,24 @@ struct Board {
 
 enum class Result { OK, NO_TIME, LOW_MEMORY, HTTP_ERROR, BAD_RESPONSE };
 
+// Parses a decrypted BFF response (JSON) fed in arbitrary chunks into `board`.
+// Departures that left before `now` are skipped. About 1.9 KB of state.
+class BoardParser {
+ public:
+  BoardParser(time_t now, Board& board);
+  ~BoardParser();
+  BoardParser(const BoardParser&) = delete;
+  BoardParser& operator=(const BoardParser&) = delete;
+
+  void feed(const uint8_t* data, size_t len);
+
+ private:
+  struct Impl;
+  Impl* impl;
+};
+
 // Decrypts and parses a BFF response fed in arbitrary chunks into `board`.
-// About 1.5 KB of state; allocate it on the heap.
+// About 2.2 KB of state; allocate it on the heap.
 class BoardDecoder {
  public:
   BoardDecoder(time_t now, Board& board);

@@ -32,6 +32,7 @@ constexpr int REFRESH_AFTER_SECONDS = 45;  // re-showing a board younger than th
 constexpr time_t BACKGROUND_ALERTS_SECONDS = 3 * 3600;
 constexpr int AUTO_CHIP_GAP = 12;
 constexpr int BADGE_ROW = 40;  // extra header row when the asleep badge moves under the route
+constexpr int ALERT_LINE = 22;  // line pitch of the hero's alert text
 
 void upper(const char* in, char* out, const size_t size) {
   size_t i = 0;
@@ -46,7 +47,7 @@ void titleCase(const char* in, char* out, const size_t size) {
   for (; in[i] && i + 1 < size; i++) {
     const char c = in[i];
     out[i] = (!wordStart && c >= 'A' && c <= 'Z') ? c + 32 : c;
-    wordStart = c == ' ' || c == '-' || c == '.' || c == '\'';
+    wordStart = c == ' ' || c == '-' || c == '.' || c == '\'' || c == '(';
   }
   out[i] = '\0';
 }
@@ -73,15 +74,52 @@ int countdownMinutes(const trenord::Departure& d, const time_t now, const time_t
   return seconds <= 0 ? 0 : static_cast<int>((seconds + 59) / 60);
 }
 
+// A train with any alert never reads "on time": its delay, or what the alert says it is.
 void delayText(const trenord::Departure& d, char* out, const size_t size) {
-  if (d.cancelled) {
+  using trenord::Disruption;
+  if (d.cancelled()) {
     snprintf(out, size, "%s", tr(STR_TRAINS_CANCELLED));
-  } else if (d.delayMin == trenord::DELAY_UNKNOWN) {
-    out[0] = '\0';
-  } else if (d.delayMin <= 0) {
-    snprintf(out, size, "%s", tr(STR_TRAINS_ON_TIME));
-  } else {
+  } else if (d.delayMin != trenord::DELAY_UNKNOWN && d.delayMin > 0) {
     snprintf(out, size, "+%d %s", d.delayMin, tr(STR_TRAINS_MIN));
+  } else if (d.disruption == Disruption::PARTIAL) {
+    snprintf(out, size, "%s", tr(STR_TRAINS_LIMITED));
+  } else if (d.disruption == Disruption::BUS) {
+    snprintf(out, size, "%s", tr(STR_TRAINS_BUS));
+  } else if (d.disruption != Disruption::NONE || d.delayMin == trenord::DELAY_UNKNOWN) {
+    out[0] = '\0';
+  } else {
+    snprintf(out, size, "%s", tr(STR_TRAINS_ON_TIME));
+  }
+}
+
+// The train's own alert as one line: "! Limited: cancelled Treviglio-Pioltello Limito (Forza Maggiore)".
+// Empty when the train has none.
+void disruptionText(const trenord::Departure& d, char* out, const size_t size) {
+  using trenord::Disruption;
+  out[0] = '\0';
+  if (d.disruption == Disruption::NONE) return;
+  // Cancelled stretches name stations in capitals; other alerts are sentences.
+  char note[sizeof(d.note)];
+  if (d.disruption == Disruption::PARTIAL || d.disruption == Disruption::CANCELLED) {
+    titleCase(d.note, note, sizeof(note));
+  } else {
+    snprintf(note, sizeof(note), "%s", d.note);
+  }
+  const char* sep = note[0] ? ": " : "";
+  switch (d.disruption) {
+    case Disruption::PARTIAL:
+      snprintf(out, size, note[0] ? "! %s: %s %s" : "! %s", tr(STR_TRAINS_LIMITED), tr(STR_TRAINS_STRETCH_CANCELLED),
+               note);
+      break;
+    case Disruption::CANCELLED:
+      if (note[0]) snprintf(out, size, "! %s%s%s", tr(STR_TRAINS_CANCELLED), sep, note);
+      break;
+    case Disruption::BUS:
+      snprintf(out, size, "! %s%s%s", tr(STR_TRAINS_BUS), sep, note);
+      break;
+    default:
+      if (note[0]) snprintf(out, size, "! %s", note);
+      break;
   }
 }
 
@@ -245,19 +283,18 @@ void TrainsActivity::onWifiSelectionComplete(const bool connected) {
 }
 
 void TrainsActivity::runFetch() {
-  trenord::Board fresh;
-  const trenord::Result result = trenord::fetchBoard(requestedOrigin, requestedTowards, fresh);
+  // Straight into the on-screen board (already this route's): fetchBoard only writes it on success.
+  const trenord::Result result = trenord::fetchBoard(requestedOrigin, requestedTowards, board);
   switch (result) {
     case trenord::Result::OK:
-      board = fresh;
       hasBoard = true;
       scroll = 0;
       state = State::READY;
       if (requestedOrigin == config.origin && requestedTowards == config.towards) {
-        cache.outbound = fresh;
+        cache.outbound = board;
         cache.hasOutbound = true;
       } else {
-        cache.inbound = fresh;
+        cache.inbound = board;
         cache.hasInbound = true;
         cache.markRecent(requestedOrigin);
       }
@@ -267,7 +304,7 @@ void TrainsActivity::runFetch() {
       }
       // Line notices change slowly and the feed is ~170 KB per line: refresh at most every 30 min
       // (every few hours from a timer wake, which should stay short).
-      if (fresh.fetchedAt - cache.alerts.fetchedAt >=
+      if (board.fetchedAt - cache.alerts.fetchedAt >=
           (background != BackgroundMode::Off ? BACKGROUND_ALERTS_SECONDS : trenord_alerts::REFRESH_SECONDS)) {
         state = State::LOADING_ALERTS;
       } else {
@@ -604,7 +641,19 @@ int TrainsActivity::renderHero(const int x, const int y, const int width, const 
   snprintf(line, sizeof(line), direction[0] ? "%s  >  %s" : "%s", train, direction);
   renderer.drawText(UI_12_FONT_ID, detailX, detailY + 36 - lift, line);
   const trenord_alerts::Notice* notice = cache.alerts.forTrain(next.number);
-  if (notice) {
+  char alert[96];
+  disruptionText(next, alert, sizeof(alert));
+  int alertLines = 0;
+  if (alert[0]) {
+    // The train's own alert gets two lines: the cancelled stretch and its reason should both show.
+    char lines[2][96];
+    alertLines =
+        income_gfx::wrapText(renderer, UI_10_FONT_ID, alert, width - (detailX - x), lines, 2, EpdFontFamily::BOLD);
+    for (int i = 0; i < alertLines; i++) {
+      renderer.drawText(UI_10_FONT_ID, detailX, detailY + 66 - lift + i * ALERT_LINE, lines[i], true,
+                        EpdFontFamily::BOLD);
+    }
+  } else if (notice) {
     // The notice's own words, cut to one line: "! Il treno 24556 ... non è ancora partito ..."
     // Skip the "Il treno 24556 (TREVIGLIO 16:10 - VARESE 18:21)" preamble; the hero already names the train.
     const char* text = notice->text;
@@ -614,17 +663,19 @@ int TrainsActivity::renderHero(const int x, const int y, const int width, const 
     char reason[96];
     snprintf(reason, sizeof(reason), "! %s", text);
     char lines[1][96];
-    income_gfx::wrapText(renderer, UI_10_FONT_ID, reason, width - (detailX - x), lines, 1);
+    income_gfx::wrapText(renderer, UI_10_FONT_ID, reason, width - (detailX - x), lines, 1, EpdFontFamily::BOLD);
     renderer.drawText(UI_10_FONT_ID, detailX, detailY + 66 - lift, lines[0], true, EpdFontFamily::BOLD);
   } else if (next.platform[0]) {
     snprintf(line, sizeof(line), "%s %s", tr(STR_TRAINS_PLATFORM), next.platform);
     renderer.drawText(UI_10_FONT_ID, detailX, detailY + 66 - lift, line, true, EpdFontFamily::BOLD);
   }
-  if (next.cancelled) {
+  if (next.cancelled()) {
     // Strike the hero number so a cancelled train never reads as catchable.
     renderer.fillRect(x - 4, y + (pixel * 7) / 2 - 2, bigWidth + 8, 5, true);
   }
-  return wide ? y + heroHeight : detailY + 90;
+  const int extra = alertLines > 1 ? (alertLines - 1) * ALERT_LINE : 0;
+  if (!wide) return detailY + 90 + extra;
+  return std::max(y + heroHeight, detailY + 88 - lift + extra);
 }
 
 void TrainsActivity::renderList(const int x, const int y, const int width, const int height, const time_t now) const {
@@ -648,6 +699,11 @@ void TrainsActivity::renderList(const int x, const int y, const int width, const
     char text[48];
     clockText(d.scheduled, text, sizeof(text));
     renderer.drawText(UI_12_FONT_ID, x, rowY, text, true, EpdFontFamily::BOLD);
+    if (d.cancelled()) {
+      // Struck through, like the hero, so a cancelled row never reads as catchable.
+      const int w = renderer.getTextWidth(UI_12_FONT_ID, text, EpdFontFamily::BOLD);
+      renderer.fillRect(x - 2, rowY + renderer.getLineHeight(UI_12_FONT_ID) / 2 - 1, w + 4, 3, true);
+    }
     if (countdowns) {
       const int countdown = countdownMinutes(d, now, board.fetchedAt);
       if (countdown < 0) {
@@ -658,8 +714,8 @@ void TrainsActivity::renderList(const int x, const int y, const int width, const
       renderer.drawText(UI_12_FONT_ID, colIn, rowY, text);
     }
     delayText(d, text, sizeof(text));
-    if (!d.cancelled && cache.alerts.forTrain(d.number)) {
-      // A line notice names this train: flag it without crowding the row.
+    if (!d.cancelled() && (d.disruption != trenord::Disruption::NONE || cache.alerts.forTrain(d.number))) {
+      // The train has an alert (its own or a line notice naming it): flag it without crowding the row.
       snprintf(text + strlen(text), sizeof(text) - strlen(text), "%s!", text[0] ? " " : "");
     }
     renderer.drawText(UI_10_FONT_ID, colDelay, rowY + 2, text, true, EpdFontFamily::BOLD);

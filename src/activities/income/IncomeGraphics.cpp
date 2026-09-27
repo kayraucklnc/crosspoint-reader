@@ -163,7 +163,7 @@ int drawStepStatus(const GfxRenderer& renderer, const int x, const int y, const 
 }
 
 int wrapText(const GfxRenderer& renderer, const int fontId, const char* text, const int maxWidth, char (*lines)[96],
-             const int maxLines) {
+             const int maxLines, const EpdFontFamily::Style style) {
   int count = 0;
   const char* p = text;
   while (*p && count < maxLines) {
@@ -178,7 +178,7 @@ int wrapText(const GfxRenderer& renderer, const int fontId, const char* text, co
       while (*wordEnd && *wordEnd != ' ') wordEnd++;
       char candidate[96];
       snprintf(candidate, sizeof(candidate), "%s%s%.*s", line, len ? " " : "", static_cast<int>(wordEnd - rest), rest);
-      if (len && renderer.getTextWidth(fontId, candidate) > maxWidth) break;
+      if (len && renderer.getTextWidth(fontId, candidate, style) > maxWidth) break;
       snprintf(line, 96, "%s", candidate);
       len = strlen(line);
       rest = wordEnd;
@@ -190,8 +190,8 @@ int wrapText(const GfxRenderer& renderer, const int fontId, const char* text, co
   if (*p && count > 0) {
     char* last = lines[count - 1];
     size_t len = strlen(last);
-    while (len > 0 && renderer.getTextWidth(fontId, last) + renderer.getTextWidth(fontId, "...") > maxWidth)
-      last[--len] = '\0';
+    const int ellipsis = renderer.getTextWidth(fontId, "...", style);
+    while (len > 0 && renderer.getTextWidth(fontId, last, style) + ellipsis > maxWidth) last[--len] = '\0';
     snprintf(last + len, 96 - len, "...");
   }
   return count;

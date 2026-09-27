@@ -8,8 +8,9 @@
 // (https://www.trenord.it/rest/render/line-details?code=S5). The response is a
 // JSON string of HTML (~170 KB) listing "Stato della linea" and dated notices;
 // it is scanned as a stream for text runs, so nothing large is ever held.
-// The journey planner (hafas/v2) carries no notices, and its hafas_alerts list
-// stays empty even on announced strike days.
+// The journey planner (hafas/v2) only carries alerts for individual trains
+// (see TrenordBoardParser.cpp); its hafas_alerts list stays empty even on
+// announced strike days.
 namespace trenord_alerts {
 
 struct Notice {
