@@ -83,7 +83,7 @@ struct TileText {
 };
 
 // Byte offsets of the codepoints of `text` (UTF-8) plus the end; returns the count.
-int codepoints(const char* text, uint32_t* cps, int* starts, const int max) {
+int codepoints(const char* text, uint16_t* cps, uint8_t* starts, const int max) {
   int n = 0, at = 0;
   const auto* bytes = reinterpret_cast<const unsigned char*>(text);
   while (bytes[at] && n < max) {
@@ -91,15 +91,15 @@ int codepoints(const char* text, uint32_t* cps, int* starts, const int max) {
     const int len = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xE ? 3 : 4;
     uint32_t cp = len == 1 ? lead : len == 2 ? lead & 0x1F : len == 3 ? lead & 0x0F : lead & 0x07;
     for (int k = 1; k < len && bytes[at + k]; k++) cp = (cp << 6) | (bytes[at + k] & 0x3F);
-    starts[n] = at;
-    cps[n++] = cp;
+    starts[n] = static_cast<uint8_t>(at);
+    cps[n++] = static_cast<uint16_t>(cp > 0xFFFF ? 0xFFFF : cp);
     for (int k = 0; k < len && bytes[at]; k++) at++;
   }
-  starts[n] = at;
+  starts[n] = static_cast<uint8_t>(at);
   return n;
 }
 
-bool isVowel(const uint32_t cp) {
+bool isVowel(const uint16_t cp) {
   switch (cp) {
     case 'A':
     case 'E':
@@ -118,12 +118,14 @@ bool isVowel(const uint32_t cp) {
   }
 }
 
-bool isLetter(const uint32_t cp) { return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || cp >= 0xC0; }
+bool isLetter(const uint16_t cp) {
+  return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= 0xC0 && cp < 0xFFFF);
+}
 
 // Codepoint index of the break nearest the middle: at a space or hyphen, or
 // (syllable) before a consonant followed by a vowel, which is where Turkish
 // splits syllables. -1 when there is none.
-int findBreak(const uint32_t* cps, const int n, const bool syllable) {
+int findBreak(const uint16_t* cps, const int n, const bool syllable) {
   int best = -1;
   for (int i = 1; i < n - 1; i++) {
     const bool ok = syllable ? i >= 2 && i <= n - 2 && isLetter(cps[i]) && !isVowel(cps[i]) && isVowel(cps[i + 1]) &&
@@ -142,8 +144,8 @@ TileText fitTile(const GfxRenderer& r, const char* text, const int room) {
     int fontIndex;
     bool hyphenate;
   } ATTEMPTS[] = {{0, false}, {1, false}, {0, true}, {1, true}, {2, false}, {2, true}};
-  uint32_t cps[TILE_TEXT];
-  int starts[TILE_TEXT + 1];
+  uint16_t cps[TILE_TEXT];
+  uint8_t starts[TILE_TEXT + 1];
   const int n = codepoints(text, cps, starts, TILE_TEXT - 1);
   const int spaceBreak = findBreak(cps, n, false);
   const int syllableBreak = spaceBreak < 0 ? findBreak(cps, n, true) : -1;
