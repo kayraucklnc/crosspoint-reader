@@ -7,11 +7,13 @@
 
 // Stripe income dashboard: today's income in whole US dollars as a hero number
 // plus a dithered, smoothed five-day line chart. Refreshes in place: joins a saved WiFi
-// network silently, fetches, then drops WiFi. Confirm refreshes, Back exits.
+// network silently, fetches, then drops WiFi. Confirm refreshes, Back exits, Left
+// sets the auto-refresh interval while asleep, Right switches Gross/Net.
 class IncomeActivity final : public Activity {
  public:
-  explicit IncomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("Income", renderer, mappedInput) {}
+  explicit IncomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                          BackgroundMode background = BackgroundMode::Off)
+      : Activity("Income", renderer, mappedInput), background(background) {}
 
   void onEnter() override;
   void onExit() override;
@@ -20,6 +22,10 @@ class IncomeActivity final : public Activity {
   void render(RenderLock&&) override;
   bool hasSleepSnapshot() const override { return hasSummary && state != State::NO_KEY; }
   void renderSleepSnapshot() override;
+  BackgroundRefresh backgroundRefreshState() const override {
+    return background == BackgroundMode::Off ? BackgroundRefresh::None : backgroundState;
+  }
+  void leaveBackgroundRefresh() override;
 
  private:
   // PICKING: the WiFi picker is open because no saved network could be joined.
@@ -33,6 +39,9 @@ class IncomeActivity final : public Activity {
   // Sleep snapshot: no button hints, and the status line becomes the asleep badge.
   bool frozen = false;
   GfxRenderer::Orientation savedOrientation = GfxRenderer::Orientation::Portrait;
+  // Timer-wake refresh: fetch without drawing or the WiFi picker.
+  BackgroundMode background;
+  BackgroundRefresh backgroundState = BackgroundRefresh::Pending;
 
   static StripeClient::Amount amountMode();
   void startFetch();
@@ -40,6 +49,9 @@ class IncomeActivity final : public Activity {
   void runConnect();
   void onWifiSelectionComplete(bool connected);
   void stopWifi();
+  void finishBackground(bool succeeded);
+  void openAutoRefreshPicker();
+  void toggleAmount();
 
   void renderDashboard(int width, int height) const;
   // Returns the bottom y of the hero block.

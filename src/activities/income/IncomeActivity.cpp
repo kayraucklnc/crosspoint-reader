@@ -10,12 +10,14 @@
 #include <ctime>
 
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "IncomeChart.h"
 #include "IncomeGraphics.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "WifiCredentialStore.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "autorefresh/AutoRefreshUi.h"
 #include "components/SleepSnapshot.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -32,7 +34,22 @@ void IncomeActivity::onEnter() {
   savedOrientation = renderer.getOrientation();
   renderer.setOrientation(SETTINGS.incomeLayout == 0 ? GfxRenderer::Orientation::LandscapeCounterClockwise
                                                      : GfxRenderer::Orientation::Portrait);
+  if (background == BackgroundMode::RenderOnly) {
+    state = State::READY;
+    finishBackground(hasSummary);
+    return;
+  }
   startFetch();
+}
+
+void IncomeActivity::finishBackground(const bool succeeded) {
+  if (background == BackgroundMode::Off || backgroundState != BackgroundRefresh::Pending) return;
+  backgroundState = succeeded ? BackgroundRefresh::Succeeded : BackgroundRefresh::Failed;
+}
+
+void IncomeActivity::leaveBackgroundRefresh() {
+  background = BackgroundMode::Off;
+  requestUpdate();
 }
 
 StripeClient::Amount IncomeActivity::amountMode() {
@@ -60,6 +77,7 @@ void IncomeActivity::startFetch() {
   std::string key;
   if (!StripeClient::loadKey(key)) {
     state = State::NO_KEY;
+    finishBackground(false);
     requestUpdate();
     return;
   }
@@ -85,6 +103,13 @@ void IncomeActivity::runConnect() {
       return;
     case wifi_auto_connect::Result::NO_SAVED_NETWORKS:
     case wifi_auto_connect::Result::FAILED:
+      if (background != BackgroundMode::Off) {
+        // Nobody is looking: keep the cached numbers and let the next wake retry.
+        state = State::ERROR;
+        errorMessage = tr(STR_INCOME_ERR_WIFI_JOIN);
+        finishBackground(false);
+        return;
+      }
       // Only now show the picker, without auto-connect (that just failed).
       state = State::PICKING;
       startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false),
@@ -108,6 +133,7 @@ void IncomeActivity::runFetch() {
   if (WiFi.status() != WL_CONNECTED) {
     state = State::ERROR;
     errorMessage = tr(STR_INCOME_ERR_WIFI);
+    finishBackground(false);
     requestUpdate();
     return;
   }
@@ -146,6 +172,7 @@ void IncomeActivity::runFetch() {
       errorMessage = tr(STR_INCOME_ERR_STRIPE);
       break;
   }
+  finishBackground(result == StripeClient::Result::OK);
   requestUpdate();
 }
 
@@ -164,6 +191,7 @@ void IncomeActivity::loop() {
     return;
   }
   if (state == State::PICKING) return;
+  if (background != BackgroundMode::Off) return;  // unattended: input wakes the device (main.cpp)
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     finish();
@@ -171,18 +199,54 @@ void IncomeActivity::loop() {
   }
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm) && state != State::NO_KEY) {
     startFetch();
+    return;
+  }
+  if (state == State::NO_KEY) return;
+  // On release, so the picker does not also see this press as a step.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    openAutoRefreshPicker();
+  } else if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+    toggleAmount();
   }
 }
 
+void IncomeActivity::openAutoRefreshPicker() {
+  auto picker = auto_refresh_ui::makeIntervalPicker(renderer, mappedInput, CrossPointState::SLEEP_APP_INCOME);
+  if (!picker) return;
+  startActivityForResult(std::move(picker), [](const ActivityResult& result) {
+    if (result.isCancelled) return;
+    SETTINGS.incomeAutoRefresh = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+    SETTINGS.saveToFile();
+  });
+}
+
+void IncomeActivity::toggleAmount() {
+  SETTINGS.incomeAmount = SETTINGS.incomeAmount == 1 ? 0 : 1;
+  SETTINGS.saveToFile();
+  // The other mode's cached numbers show at once; the refresh replaces them.
+  IncomeSummary cached;
+  hasSummary = StripeClient::loadCachedSummary(amountMode(), cached);
+  summary = hasSummary ? cached : IncomeSummary{};
+  startFetch();
+}
+
 void IncomeActivity::render(RenderLock&&) {
-  if (frozen) return;  // a queued live frame must not replace the sleep snapshot
+  // A queued live frame must not replace the sleep snapshot, and a timer-wake
+  // refresh draws nothing until that snapshot.
+  if (frozen || background != BackgroundMode::Off) return;
   renderer.clearScreen();
   if (state == State::NO_KEY) {
     renderMessage(tr(STR_INCOME_NO_KEY), tr(STR_INCOME_NO_KEY_HINT));
   } else {
     renderDashboard(renderer.getScreenWidth(), renderer.getScreenHeight());
   }
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), state == State::NO_KEY ? "" : tr(STR_INCOME_REFRESH), "", "");
+  const bool controls = state != State::NO_KEY;
+  char autoHint[24];
+  auto_refresh_ui::formatHint(CrossPointState::SLEEP_APP_INCOME, autoHint, sizeof(autoHint));
+  // Left/Right are actions here, not directions: label them where they physically are.
+  const auto labels = mappedInput.mapFrontLabels(
+      tr(STR_BACK), controls ? tr(STR_INCOME_REFRESH) : "", controls ? autoHint : "",
+      controls ? (SETTINGS.incomeAmount == 1 ? tr(STR_INCOME_NET) : tr(STR_INCOME_GROSS)) : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   // Status steps only change a few pixels; after the first frame a fast refresh avoids the full-screen flash.
   renderer.displayBuffer(firstRenderDone ? HalDisplay::FAST_REFRESH : HalDisplay::HALF_REFRESH);
@@ -253,7 +317,10 @@ int IncomeActivity::renderHero(const int x, const int y, const int width, const 
                                TRACKING);
   renderer.drawText(NOTOSANS_18_FONT_ID, alignX(monthWidth), blockY + 26, month, true, EpdFontFamily::BOLD);
   const int statusY = blockY + 26 + renderer.getLineHeight(NOTOSANS_18_FONT_ID) + 6;
-  const int statusWidth = landscape ? width - maxAmountWidth - 24 : width;
+  // Asleep, the badge may use everything right of the actual amount: its
+  // auto-refresh notes then stay on one line.
+  const int heroWidth = frozen ? income_gfx::pixelTextWidth(today, pixelSize) : maxAmountWidth;
+  const int statusWidth = landscape ? width - heroWidth - 24 : width;
   const int statusBottom = renderStatus(landscape ? rightEdge - statusWidth : x, statusY, statusWidth, landscape);
   return std::max(todayBottom, statusBottom);
 }

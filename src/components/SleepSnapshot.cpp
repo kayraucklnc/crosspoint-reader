@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "CrossPointSettings.h"
+#include "autorefresh/AutoRefresh.h"
 #include "fontIds.h"
 
 namespace sleep_snapshot {
@@ -82,20 +83,59 @@ void drawFrame(const GfxRenderer& renderer) {
   renderer.drawRect(band, band, width - band * 2, height - band * 2, RULE_WIDTH, true);
 }
 
+namespace {
+
+// "Asleep · as of 14:30" and the auto-refresh notes ("offline · next 14:40").
+struct BadgeText {
+  char base[48];
+  char notes[64];
+  char full[112];
+};
+
+BadgeText badgeText(const char* asOfClock) {
+  BadgeText text{};
+  snprintf(text.base, sizeof(text.base), "%s %s", tr(STR_ASLEEP_AS_OF), asOfClock);
+  const auto_refresh::SnapshotNote note = auto_refresh::snapshotNote();
+  int len = 0;
+  const auto add = [&](const char* part, const char* value) {
+    if (len < 0 || len >= static_cast<int>(sizeof(text.notes))) return;
+    len += snprintf(text.notes + len, sizeof(text.notes) - len, "%s%s%s%s", len > 0 ? " · " : "", part,
+                    value ? " " : "", value ? value : "");
+  };
+  if (note.stale) add(tr(STR_AR_OFFLINE), nullptr);
+  if (note.lowBattery) add(tr(STR_AR_LOW_BATTERY), nullptr);
+  if (note.next[0]) add(tr(STR_AR_NEXT), note.next);
+  snprintf(text.full, sizeof(text.full), text.notes[0] ? "%s · %s" : "%s%s", text.base, text.notes);
+  return text;
+}
+
+const char* wakeText() {
+  // Click-to-wake needs only a press; otherwise the wake is verified as a hold.
+  return SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ? tr(STR_PRESS_TO_WAKE) : tr(STR_HOLD_TO_WAKE);
+}
+
+}  // namespace
+
+int inlineBadgeWidth(const GfxRenderer& renderer, const char* asOfClock) {
+  return segmentWidth(renderer, badgeText(asOfClock).full, EpdFontFamily::BOLD) +
+         segmentWidth(renderer, wakeText(), EpdFontFamily::REGULAR);
+}
+
 int drawBadge(const GfxRenderer& renderer, const int x, const int y, const int width, const bool alignRight,
               const char* asOfClock) {
-  char asleep[48];
-  snprintf(asleep, sizeof(asleep), "%s %s", tr(STR_ASLEEP_AS_OF), asOfClock);
-  // Click-to-wake needs only a press; otherwise the wake is verified as a hold.
-  const char* wake = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ? tr(STR_PRESS_TO_WAKE)
-                                                                                      : tr(STR_HOLD_TO_WAKE);
+  const BadgeText text = badgeText(asOfClock);
+  const char* wake = wakeText();
 
   const int lineHeight = renderer.getLineHeight(FONT);
   const int chipHeight = lineHeight + PAD_Y * 2;
   const int radius = chipHeight / 2;
-  const int chipWidth = segmentWidth(renderer, asleep, EpdFontFamily::BOLD);
+  // The notes ride in the chip when it fits, else on their own line under it.
+  const bool notesInChip = segmentWidth(renderer, text.full, EpdFontFamily::BOLD) <= width;
+  const char* chipText = notesInChip ? text.full : text.base;
+  const bool notesLine = !notesInChip && text.notes[0];
+  const int chipWidth = segmentWidth(renderer, chipText, EpdFontFamily::BOLD);
   const int wakeWidth = segmentWidth(renderer, wake, EpdFontFamily::REGULAR);
-  const bool inline_ = chipWidth + wakeWidth <= width;
+  const bool inline_ = !notesLine && chipWidth + wakeWidth <= width;
   const auto startX = [&](const int w) { return alignRight ? x + width - w : x; };
 
   const int chipX = startX(inline_ ? chipWidth + wakeWidth : chipWidth);
@@ -109,10 +149,17 @@ int drawBadge(const GfxRenderer& renderer, const int x, const int y, const int w
     renderer.fillRoundedRect(chipX, y, chipWidth, chipHeight, radius, Color::Black);
   }
   drawMoon(renderer, chipX + PAD_X + ICON_SIZE / 2, iconCy, false);
-  renderer.drawText(FONT, chipX + PAD_X + ICON_SIZE + ICON_GAP, textY, asleep, false, EpdFontFamily::BOLD);
+  renderer.drawText(FONT, chipX + PAD_X + ICON_SIZE + ICON_GAP, textY, chipText, false, EpdFontFamily::BOLD);
 
-  // Stacked, the wake line is plain text inset like the chip's content.
-  const int wakeY = inline_ ? y : y + chipHeight + STACK_GAP;
+  // Stacked lines are plain text inset like the chip's content.
+  int nextY = y + chipHeight + STACK_GAP;
+  if (notesLine) {
+    const int notesWidth = renderer.getTextWidth(FONT, text.notes, EpdFontFamily::BOLD);
+    const int notesX = alignRight ? x + width - PAD_X - notesWidth : x + PAD_X;
+    renderer.drawText(FONT, notesX, nextY + PAD_Y, text.notes, true, EpdFontFamily::BOLD);
+    nextY += chipHeight;
+  }
+  const int wakeY = inline_ ? y : nextY;
   const int wakeIconX = inline_ ? chipX + chipWidth + PAD_X : startX(wakeWidth - PAD_X) + (alignRight ? 0 : PAD_X);
   drawPower(renderer, wakeIconX + ICON_SIZE / 2, wakeY + chipHeight / 2, true);
   renderer.drawText(FONT, wakeIconX + ICON_SIZE + ICON_GAP, wakeY + PAD_Y, wake, true);

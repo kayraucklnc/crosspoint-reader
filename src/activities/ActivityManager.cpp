@@ -266,9 +266,13 @@ void ActivityManager::goToUsbDrive() {
 #endif
 }
 
-void ActivityManager::goToIncome() { replaceActivity(std::make_unique<IncomeActivity>(renderer, mappedInput)); }
+void ActivityManager::goToIncome(const BackgroundMode background) {
+  replaceActivity(std::make_unique<IncomeActivity>(renderer, mappedInput, background));
+}
 
-void ActivityManager::goToTrains() { replaceActivity(std::make_unique<TrainsActivity>(renderer, mappedInput)); }
+void ActivityManager::goToTrains(const BackgroundMode background, const uint16_t route) {
+  replaceActivity(std::make_unique<TrainsActivity>(renderer, mappedInput, background, route));
+}
 
 void ActivityManager::goToPlay() { replaceActivity(std::make_unique<PlayMenuActivity>(renderer, mappedInput)); }
 
@@ -395,6 +399,18 @@ uint8_t ActivityManager::sleepSnapshotApp() const {
   if (currentActivity->name == "Income") return CrossPointState::SLEEP_APP_INCOME;
   if (currentActivity->name == "Trains") return CrossPointState::SLEEP_APP_TRAINS;
   return CrossPointState::SLEEP_APP_NONE;
+}
+
+uint16_t ActivityManager::sleepSnapshotRoute() const {
+  return currentActivity ? currentActivity->sleepSnapshotRoute() : DEFAULT_SLEEP_ROUTE;
+}
+
+BackgroundRefresh ActivityManager::backgroundRefreshState() const {
+  return currentActivity ? currentActivity->backgroundRefreshState() : BackgroundRefresh::None;
+}
+
+void ActivityManager::leaveBackgroundRefresh() {
+  if (currentActivity) currentActivity->leaveBackgroundRefresh();
 }
 
 bool ActivityManager::isReaderActivity() const {

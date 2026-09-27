@@ -9,11 +9,13 @@
 #include <cstring>
 
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "WifiCredentialStore.h"
 #include "activities/income/IncomeGraphics.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "autorefresh/AutoRefreshUi.h"
 #include "components/SleepSnapshot.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -26,6 +28,10 @@ constexpr int TRACKING = 3;
 constexpr int ROW_HEIGHT = 34;
 constexpr int STRIP_HEIGHT = 44;
 constexpr int REFRESH_AFTER_SECONDS = 45;  // re-showing a board younger than this skips the network
+// A timer-wake refresh reloads the ~170 KB-per-line notices feed only this often.
+constexpr time_t BACKGROUND_ALERTS_SECONDS = 3 * 3600;
+constexpr int AUTO_CHIP_GAP = 12;
+constexpr int BADGE_ROW = 40;  // extra header row when the asleep badge moves under the route
 
 void upper(const char* in, char* out, const size_t size) {
   size_t i = 0;
@@ -47,14 +53,16 @@ void titleCase(const char* in, char* out, const size_t size) {
 
 constexpr long STALE_SECONDS = 30 * 60;  // older boards show times only, no countdown
 constexpr long MAX_COUNTDOWN = 24 * 3600;
-constexpr long GONE_SECONDS = 60;          // a train this far past its (delayed) time has left
+constexpr long GONE_SECONDS = 60;  // a train this far past its (delayed) time has left
 
 long secondsUntil(const trenord::Departure& d, const time_t now) {
   const int delay = d.delayMin == trenord::DELAY_UNKNOWN ? 0 : d.delayMin;
   return static_cast<long>(d.scheduled + delay * 60 - now);
 }
 
-bool departed(const trenord::Departure& d, const time_t now) { return now != 0 && secondsUntil(d, now) < -GONE_SECONDS; }
+bool departed(const trenord::Departure& d, const time_t now) {
+  return now != 0 && secondsUntil(d, now) < -GONE_SECONDS;
+}
 
 // Minutes to departure, or -1 when it can't be trusted: unknown clock, a stale
 // board, or an implausible gap (a wrong clock shows up as days of "minutes").
@@ -107,7 +115,30 @@ void TrainsActivity::onEnter() {
   cache.load();
   config.load();
   buildStrip();
+  if (initialRoute != DEFAULT_SLEEP_ROUTE) {
+    const int origin = initialRoute >> 8;
+    const int towards = initialRoute & 0xFF;
+    if (origin < trenord::STATION_COUNT && towards < trenord::STATION_COUNT) {
+      showBoard(origin, towards);
+      return;
+    }
+  }
   showDefault();
+}
+
+uint16_t TrainsActivity::sleepSnapshotRoute() const {
+  if (!viewingReturn()) return DEFAULT_SLEEP_ROUTE;
+  return static_cast<uint16_t>((static_cast<uint8_t>(board.origin) << 8) | static_cast<uint8_t>(board.towards));
+}
+
+void TrainsActivity::finishBackground(const bool succeeded) {
+  if (background == BackgroundMode::Off || backgroundState != BackgroundRefresh::Pending) return;
+  backgroundState = succeeded ? BackgroundRefresh::Succeeded : BackgroundRefresh::Failed;
+}
+
+void TrainsActivity::leaveBackgroundRefresh() {
+  background = BackgroundMode::Off;
+  requestUpdate();
 }
 
 void TrainsActivity::onExit() {
@@ -128,8 +159,8 @@ void TrainsActivity::buildStrip() {
   for (const int8_t f : config.favorites) hasFavorites = hasFavorites || f >= 0;
   stripCount = 0;
   for (const int8_t station : trenord::LINE_ORDER) {
-    const bool favorite = std::find(std::begin(config.favorites), std::end(config.favorites), station) !=
-                          std::end(config.favorites);
+    const bool favorite =
+        std::find(std::begin(config.favorites), std::end(config.favorites), station) != std::end(config.favorites);
     if (station == config.origin || !hasFavorites || favorite) strip[stripCount++] = station;
     if (station == config.origin) cursor = stripCount - 1;
   }
@@ -158,6 +189,7 @@ void TrainsActivity::showBoard(const int origin, const int towards) {
   const time_t now = network_time::current();
   if (cached && now != 0 && now >= cached->fetchedAt && now - cached->fetchedAt < REFRESH_AFTER_SECONDS) {
     state = State::READY;
+    finishBackground(true);
     requestUpdate();
     return;
   }
@@ -165,6 +197,11 @@ void TrainsActivity::showBoard(const int origin, const int towards) {
 }
 
 void TrainsActivity::startRefresh() {
+  if (background == BackgroundMode::RenderOnly) {
+    state = State::READY;
+    finishBackground(hasBoard);
+    return;
+  }
   if (WiFi.status() == WL_CONNECTED) {
     state = State::LOADING;
   } else {
@@ -183,6 +220,13 @@ void TrainsActivity::runConnect() {
   if (wifi_auto_connect::connect() == wifi_auto_connect::Result::CONNECTED) {
     state = State::LOADING;
     requestUpdate();
+    return;
+  }
+  if (background != BackgroundMode::Off) {
+    // Nobody is looking: keep the cached board and let the next wake retry.
+    state = State::ERROR;
+    errorMessage = tr(STR_INCOME_ERR_WIFI_JOIN);
+    finishBackground(false);
     return;
   }
   state = State::PICKING;
@@ -221,8 +265,14 @@ void TrainsActivity::runFetch() {
         RenderLock lock(*this);
         cache.save();
       }
-      // Line notices change slowly and the feed is ~170 KB per line: refresh at most every 30 min.
-      if (fresh.fetchedAt - cache.alerts.fetchedAt >= trenord_alerts::REFRESH_SECONDS) state = State::LOADING_ALERTS;
+      // Line notices change slowly and the feed is ~170 KB per line: refresh at most every 30 min
+      // (every few hours from a timer wake, which should stay short).
+      if (fresh.fetchedAt - cache.alerts.fetchedAt >=
+          (background != BackgroundMode::Off ? BACKGROUND_ALERTS_SECONDS : trenord_alerts::REFRESH_SECONDS)) {
+        state = State::LOADING_ALERTS;
+      } else {
+        finishBackground(true);
+      }
       break;
     case trenord::Result::NO_TIME:
       state = State::ERROR;
@@ -241,6 +291,7 @@ void TrainsActivity::runFetch() {
       errorMessage = tr(STR_TRAINS_ERR_DATA);
       break;
   }
+  if (result != trenord::Result::OK) finishBackground(false);
   requestUpdate();
 }
 
@@ -266,6 +317,7 @@ void TrainsActivity::runAlerts() {
     cache.save();
   }
   state = State::READY;
+  finishBackground(true);  // the board itself is fresh; notices are best effort
   requestUpdate();
 }
 
@@ -289,6 +341,7 @@ void TrainsActivity::loop() {
     return;
   }
   if (state == State::PICKING) return;
+  if (background != BackgroundMode::Off) return;  // unattended: input wakes the device (main.cpp)
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     if (viewingReturn()) {
@@ -299,7 +352,13 @@ void TrainsActivity::loop() {
     }
     return;
   }
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+  if (onAutoChip()) {
+    // On release: the picker confirms on Confirm's release and would take this one.
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      openAutoRefreshPicker();
+      return;
+    }
+  } else if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     const int station = strip[cursor];
     if (station == config.origin) {
       showDefault();
@@ -312,7 +371,7 @@ void TrainsActivity::loop() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Left) && cursor > 0) {
     cursor--;
     requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::Right) && cursor + 1 < stripCount) {
+  } else if (mappedInput.wasPressed(MappedInputManager::Button::Right) && cursor < stripCount) {
     cursor++;
     requestUpdate();
   } else if (mappedInput.wasPressed(MappedInputManager::Button::Down) && scroll + 2 < board.count) {
@@ -324,8 +383,20 @@ void TrainsActivity::loop() {
   }
 }
 
+void TrainsActivity::openAutoRefreshPicker() {
+  auto picker = auto_refresh_ui::makeIntervalPicker(renderer, mappedInput, CrossPointState::SLEEP_APP_TRAINS);
+  if (!picker) return;
+  startActivityForResult(std::move(picker), [](const ActivityResult& result) {
+    if (result.isCancelled) return;
+    SETTINGS.trainsAutoRefresh = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+    SETTINGS.saveToFile();
+  });
+}
+
 void TrainsActivity::render(RenderLock&&) {
-  if (frozen) return;  // a queued live frame must not replace the sleep snapshot
+  // A queued live frame must not replace the sleep snapshot, and a timer-wake
+  // refresh draws nothing until that snapshot.
+  if (frozen || background != BackgroundMode::Off) return;
   drawPage();
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -352,8 +423,9 @@ void TrainsActivity::drawPage() {
   const time_t now = network_time::current();  // 0 when the clock is unknown
   renderer.clearScreen();
 
-  renderHeader(MARGIN, MARGIN - 6, contentWidth);
-  const int heroTop = MARGIN + (contentWidth >= 600 ? 34 : (frozen ? 64 : 56));
+  const int headerBottom = renderHeader(MARGIN, MARGIN - 6, contentWidth);
+  // A stacked asleep badge pushes the hero down rather than running into it.
+  const int heroTop = std::max(MARGIN + (contentWidth >= 600 ? 34 : (frozen ? 64 : 56)), headerBottom + 12);
   const int strikeHeight = renderStrike(MARGIN, heroTop - 6, contentWidth, now);
   const int heroBottom = renderHero(MARGIN, heroTop + strikeHeight, contentWidth, now);
   if (frozen) {
@@ -367,40 +439,55 @@ void TrainsActivity::drawPage() {
   renderStrip(stripY, contentWidth);
 }
 
-void TrainsActivity::renderHeader(const int x, const int y, const int width) const {
+void TrainsActivity::routeLabel(char* out, const size_t size) const {
   char from[24];
   char to[24];
   upper(trenord::STATIONS[board.origin].label, from, sizeof(from));
   upper(trenord::STATIONS[board.towards].label, to, sizeof(to));
+  snprintf(out, size, "%s  >  %s", from, to);
+}
+
+bool TrainsActivity::badgeBelowRoute(const int width) const {
+  if (!frozen || width < 600) return false;
   char route[64];
-  snprintf(route, sizeof(route), "%s  >  %s", from, to);
+  routeLabel(route, sizeof(route));
+  char clock[8];
+  clockText(board.fetchedAt, clock, sizeof(clock));
+  const int routeWidth = income_gfx::trackedLabelWidth(renderer, UI_10_FONT_ID, route, TRACKING) + 24;
+  return routeWidth + sleep_snapshot::inlineBadgeWidth(renderer, clock) > width;
+}
+
+int TrainsActivity::renderHeader(const int x, const int y, const int width) const {
+  char route[64];
+  routeLabel(route, sizeof(route));
   income_gfx::drawTrackedLabel(renderer, UI_10_FONT_ID, x, y, route, TRACKING);
   // Portrait has no room beside the route; the status gets its own line.
   const bool wide = width >= 600;
+  if (badgeBelowRoute(width)) {
+    // Auto-refresh notes make the badge too long to share the route's line.
+    return renderStatus(x, y + BADGE_ROW + 2, width);
+  }
   if (wide && frozen) {
     // The asleep badge may only use what the route leaves free (it stacks when that is too narrow).
     const int routeWidth = income_gfx::trackedLabelWidth(renderer, UI_10_FONT_ID, route, TRACKING) + 24;
-    renderStatus(x + routeWidth, y + 2, width - routeWidth);
-  } else if (wide) {
-    renderStatus(x, y + 2, width);
-  } else {
-    renderStatus(x, y + (frozen ? 30 : 26), width);  // the asleep badge is taller than a text line
+    return renderStatus(x + routeWidth, y + 2, width - routeWidth);
   }
+  if (wide) return renderStatus(x, y + 2, width);
+  return renderStatus(x, y + (frozen ? 30 : 26), width);  // the asleep badge is taller than a text line
 }
 
-void TrainsActivity::renderStatus(const int x, const int y, const int width) const {
+int TrainsActivity::renderStatus(const int x, const int y, const int width) const {
   if (frozen) {
     char clock[8];
     clockText(board.fetchedAt, clock, sizeof(clock));
-    sleep_snapshot::drawBadge(renderer, x, y - 4, width, true, clock);
-    return;
+    return sleep_snapshot::drawBadge(renderer, x, y - 4, width, true, clock);
   }
   if (state == State::CONNECTING || state == State::LOADING || state == State::LOADING_ALERTS ||
       state == State::PICKING) {
     const bool fetching = state == State::LOADING || state == State::LOADING_ALERTS;
     income_gfx::drawStepStatus(renderer, x, y, width, true, fetching ? 1 : 0,
                                fetching ? tr(STR_INCOME_FETCHING) : tr(STR_INCOME_CONNECTING));
-    return;
+    return y;
   }
   char text[96];
   if (state == State::ERROR) {
@@ -410,12 +497,13 @@ void TrainsActivity::renderStatus(const int x, const int y, const int width) con
     clockText(board.fetchedAt, clock, sizeof(clock));
     snprintf(text, sizeof(text), "%s %s", tr(STR_INCOME_UPDATED), clock);
   } else {
-    return;
+    return y;
   }
   char lines[1][96];
   income_gfx::wrapText(renderer, SMALL_FONT_ID, text, width / 2, lines, 1);
   const int w = renderer.getTextWidth(SMALL_FONT_ID, lines[0]);
   renderer.drawText(SMALL_FONT_ID, x + width - w, y, lines[0]);
+  return y;
 }
 
 // Index of the first departure that has not left yet (departed ones stay hidden).
@@ -593,8 +681,24 @@ void TrainsActivity::renderList(const int x, const int y, const int width, const
   }
 }
 
-void TrainsActivity::renderStrip(const int y, const int width) const {
-  renderer.fillRect(MARGIN, y - 8, width, 2, true);
+int TrainsActivity::renderAutoChip(const int y, const int right) const {
+  char label[24];
+  auto_refresh_ui::formatHint(CrossPointState::SLEEP_APP_TRAINS, label, sizeof(label));
+  const int w = renderer.getTextWidth(UI_10_FONT_ID, label, EpdFontFamily::BOLD) + 18;
+  const int x = right - w;
+  const bool selected = onAutoChip();
+  if (selected) {
+    renderer.fillRoundedRect(x, y, w, STRIP_HEIGHT - 8, 8, Color::Black);
+  } else {
+    renderer.drawRoundedRect(x, y, w, STRIP_HEIGHT - 8, 1, 8, true);
+  }
+  renderer.drawText(UI_10_FONT_ID, x + 9, y + 8, label, !selected, EpdFontFamily::BOLD);
+  return w;
+}
+
+void TrainsActivity::renderStrip(const int y, const int fullWidth) const {
+  renderer.fillRect(MARGIN, y - 8, fullWidth, 2, true);
+  const int width = fullWidth - renderAutoChip(y, MARGIN + fullWidth) - AUTO_CHIP_GAP;
   // Lay items out left to right, sliding the window so the cursor stays visible.
   int widths[MAX_STRIP];
   for (int i = 0; i < stripCount; i++) {
@@ -606,7 +710,8 @@ void TrainsActivity::renderStrip(const int y, const int width) const {
     for (int i = from; i <= to; i++) w += widths[i];
     return w;
   };
-  while (start < cursor && spanWidth(start, cursor) > width) start++;
+  const int visibleCursor = std::min(cursor, stripCount - 1);
+  while (start < visibleCursor && spanWidth(start, visibleCursor) > width) start++;
 
   int cx = MARGIN;
   for (int i = start; i < stripCount && cx + widths[i] <= MARGIN + width; i++) {

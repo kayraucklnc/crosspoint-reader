@@ -355,6 +355,12 @@ async function viewWifi(m) {
 }
 
 // ---------- Settings ----------
+// Value settings stored as choice indices or hours, shown with their meaning.
+const AR_TRAINS = [0, 5, 10, 15, 20, 30, 45, 60, 90, 120, 150];
+const arDur = m => !m ? 'Off' : m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + String(m % 60).padStart(2, '0') : '');
+const arHour = h => String(h).padStart(2, '0') + ':00';
+const VALUE_LABELS = {trainsAutoRefresh: i => arDur(AR_TRAINS[i]), incomeAutoRefresh: i => arDur(i * 30),
+  autoRefreshQuietStart: arHour, autoRefreshQuietEnd: arHour};
 const HIDDEN = new Set(['clockUtcOffsetQ', 'clockHasBeenSynced', 'clockTimezone', 'incomeAmount', 'incomeDayUtc', 'incomeLayout', 'wallpaperMode', 'frontlightOn']);
 async function viewSettings(m) {
   m.innerHTML = `<h1>Settings</h1><input class="search" id="q" placeholder="Search settings" type="search">
@@ -367,6 +373,10 @@ async function viewSettings(m) {
     const id = 'c-' + s.key;
     if (s.type === 'toggle') return `<label class="switch"><input type="checkbox" id="${id}" ${s.value ? 'checked' : ''}><span></span></label>`;
     if (s.type === 'enum') return `<select id="${id}">${s.options.map((o, i) => `<option value="${i}" ${i === s.value ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    if (s.type === 'value' && VALUE_LABELS[s.key]) {
+      const opts = []; for (let i = s.min; i <= s.max; i += s.step) opts.push(`<option value="${i}" ${i === s.value ? 'selected' : ''}>${VALUE_LABELS[s.key](i)}</option>`);
+      return `<select id="${id}">${opts.join('')}</select>`;
+    }
     if (s.type === 'value') return `<input type="number" id="${id}" value="${s.value}" min="${s.min}" max="${s.max}" step="${s.step}" style="width:96px">`;
     return `<input id="${id}" type="${/password/i.test(s.name) ? 'password' : 'text'}" value="${esc(s.value)}">`;
   };

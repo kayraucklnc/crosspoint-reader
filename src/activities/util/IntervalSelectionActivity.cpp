@@ -144,8 +144,17 @@ void IntervalSelectionActivity::loop() {
                                        [this, downDelta] { adjustValue(downDelta); });
 }
 
+void IntervalSelectionActivity::setFormatter(const ValueFormatter valueFormatter, const char* hint1,
+                                             const char* hint2) {
+  formatter = valueFormatter;
+  snprintf(customHints[0], sizeof(customHints[0]), "%s", hint1 ? hint1 : "");
+  snprintf(customHints[1], sizeof(customHints[1]), "%s", hint2 ? hint2 : "");
+}
+
 void IntervalSelectionActivity::formatValue(char* buffer, const size_t size, const int forValue) const {
-  if (maxBoundaryLabelId != StrId::STR_NONE_OPT && forValue == maxValue) {
+  if (formatter) {
+    formatter(forValue, buffer, size);
+  } else if (maxBoundaryLabelId != StrId::STR_NONE_OPT && forValue == maxValue) {
     snprintf(buffer, size, "%s", I18N.get(maxBoundaryLabelId));
   } else if (valueFormatId != StrId::STR_NONE_OPT) {
     snprintf(buffer, size, I18N.get(valueFormatId), static_cast<unsigned int>(forValue));
@@ -197,6 +206,10 @@ void IntervalSelectionActivity::buildIntervalScreen(UiScreen& screen) {
   spec.chromeAction = ACTION_CHROME;
   spec.hintLine1 = hints[0];
   spec.hintLine2 = hints[1];
+  if (formatter) {
+    spec.hintLine1 = customHints[0][0] ? customHints[0] : nullptr;
+    spec.hintLine2 = customHints[1][0] ? customHints[1] : nullptr;
+  }
   buildSliderDialogScreen(screen, uiTarget, mappedInput, spec);
 }
 

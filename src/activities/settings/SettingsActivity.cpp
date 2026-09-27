@@ -18,6 +18,7 @@
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "FontDownloadActivity.h"
 #include "HomeButtonSettingsActivity.h"
 #include "KOReaderSettingsActivity.h"
@@ -38,6 +39,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/stats/ReadingStatsActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
+#include "autorefresh/AutoRefreshUi.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
@@ -322,6 +324,7 @@ void SettingsActivity::toggleCurrentSetting() {
     openSleepTimeoutPicker();
     return;
   }
+  if (setting.valuePtr && openAutoRefreshPicker(setting.valuePtr)) return;
 
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     // Toggle the boolean value using the member pointer
@@ -543,6 +546,30 @@ void SettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChan
   }
 }
 
+bool SettingsActivity::openAutoRefreshPicker(uint8_t CrossPointSettings::* valuePtr) {
+  std::unique_ptr<Activity> picker;
+  if (valuePtr == &CrossPointSettings::trainsAutoRefresh) {
+    picker = auto_refresh_ui::makeIntervalPicker(renderer, mappedInput, CrossPointState::SLEEP_APP_TRAINS);
+  } else if (valuePtr == &CrossPointSettings::incomeAutoRefresh) {
+    picker = auto_refresh_ui::makeIntervalPicker(renderer, mappedInput, CrossPointState::SLEEP_APP_INCOME);
+  } else if (valuePtr == &CrossPointSettings::autoRefreshQuietStart) {
+    picker = auto_refresh_ui::makeQuietHourPicker(renderer, mappedInput, false);
+  } else if (valuePtr == &CrossPointSettings::autoRefreshQuietEnd) {
+    picker = auto_refresh_ui::makeQuietHourPicker(renderer, mappedInput, true);
+  } else {
+    return false;
+  }
+  if (!picker) return true;
+  startActivityForResult(std::move(picker), [this, valuePtr](const ActivityResult& result) {
+    if (!result.isCancelled) {
+      SETTINGS.*valuePtr = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+      SETTINGS.saveToFile();
+    }
+    requestUpdate();
+  });
+  return true;
+}
+
 void SettingsActivity::openSleepTimeoutPicker() {
   startActivityForResult(
       std::make_unique<IntervalSelectionActivity>(
@@ -583,6 +610,20 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
     return "";
   }
   if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
+    char autoText[24];
+    if (setting.valuePtr == &CrossPointSettings::trainsAutoRefresh) {
+      auto_refresh_ui::formatAppInterval(CrossPointState::SLEEP_APP_TRAINS, autoText, sizeof(autoText), false);
+      return autoText;
+    }
+    if (setting.valuePtr == &CrossPointSettings::incomeAutoRefresh) {
+      auto_refresh_ui::formatAppInterval(CrossPointState::SLEEP_APP_INCOME, autoText, sizeof(autoText), false);
+      return autoText;
+    }
+    if (setting.valuePtr == &CrossPointSettings::autoRefreshQuietStart ||
+        setting.valuePtr == &CrossPointSettings::autoRefreshQuietEnd) {
+      auto_refresh_ui::formatHour(SETTINGS.*(setting.valuePtr), autoText, sizeof(autoText));
+      return autoText;
+    }
     if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
       if (SETTINGS.sleepTimeoutMinutes >= CrossPointSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
         return tr(STR_SLEEP_NEVER);
@@ -645,12 +686,21 @@ void SettingsActivity::drawChrome() {
                  CROSSPOINT_VERSION);
 }
 
+namespace {
+// Settings that open a picker instead of toggling or cycling in place.
+bool isPickerSetting(const SettingInfo& setting) {
+  return setting.nameId == StrId::STR_TIME_TO_SLEEP || setting.valuePtr == &CrossPointSettings::trainsAutoRefresh ||
+         setting.valuePtr == &CrossPointSettings::incomeAutoRefresh ||
+         setting.valuePtr == &CrossPointSettings::autoRefreshQuietStart ||
+         setting.valuePtr == &CrossPointSettings::autoRefreshQuietEnd;
+}
+}  // namespace
+
 void SettingsActivity::drawFooter() {
   const int ring = ringPos();
   const auto confirmLabel =
       (ring == 0) ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-                  : (ring > 0 && (*currentSettings)[ring - 1].nameId == StrId::STR_TIME_TO_SLEEP ? tr(STR_SELECT)
-                                                                                                 : tr(STR_TOGGLE));
+                  : (ring > 0 && isPickerSetting((*currentSettings)[ring - 1]) ? tr(STR_SELECT) : tr(STR_TOGGLE));
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
