@@ -11,12 +11,17 @@
 #include "activities/Activity.h"
 
 // Connections: sixteen words, four hidden groups of four, four mistakes.
-// Puzzles come from a pack on the SD card (/.crosspoint/games/connections),
-// seeded by scripts/gen_connections.py and refreshed on the device from the
-// public archive mirror (Update puzzles). Rules, pack and importer are ported
-// from CrossPlay; the screens are rebuilt for the six buttons.
+// Offline, in English (the NYT archive, scripts/gen_connections.py) or Turkish
+// (an authored pack, scripts/gen_connections_tr.py), each a pack on the SD card
+// (/.crosspoint/games/connections) with its own daily, results and board.
 //
-// Home: Left/Right or side Up/Down pick an entry, Confirm opens, Back exits.
+// The daily is ours, not the NYT's: day N since the language's launch day
+// deals a fixed puzzle from a shuffled pass over the pack (ConnectionsDaily.h),
+// so it follows the local date, needs no network and repeats nothing until the
+// pack is used up. Random and the archive replay past dailies.
+//
+// Home: side Up/Down or Left/Right pick an entry (the language switch sits
+// under the title), Confirm opens, Back exits.
 // Board: Left/Right move along a row, side Up/Down change row (the row under
 // the grid holds Shuffle, Deselect and Submit), Confirm selects a word. The
 // fourth pick jumps to Submit; holding Confirm submits from anywhere. Back
@@ -35,37 +40,37 @@ class ConnectionsActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
-  bool skipLoopDelay() override { return screen == Screen::UPDATE && updateStep < UpdateStep::PICKING; }
 
   // Play-menu preview drawn inside a size x size box.
   static void drawMenuIcon(const GfxRenderer& renderer, int x, int y, int size);
 
  private:
-  enum class Screen : uint8_t { HOME, GAME, RESULT, ARCHIVE, STATS, UPDATE };
+  enum class Screen : uint8_t { HOME, GAME, RESULT, ARCHIVE, STATS };
   enum class Toast : uint8_t { NONE, ONE_AWAY, WRONG, REPEAT, NEED_FOUR, FULL };
-  enum class UpdateStep : uint8_t { CONNECT, DOWNLOAD, PICKING, DONE, FAILED };
-  enum HomeItem : uint8_t { HOME_TODAY, HOME_RANDOM, HOME_ARCHIVE, HOME_UPDATE, HOME_STATS, HOME_ITEMS };
+  enum HomeItem : uint8_t { HOME_LANG, HOME_TODAY, HOME_RANDOM, HOME_ARCHIVE, HOME_STATS, HOME_ITEMS };
   enum Action : uint8_t { ACT_SHUFFLE, ACT_DESELECT, ACT_SUBMIT, ACTION_COUNT };
-  // Results are one byte per day since 2023-06-12; 4096 days reach 2034.
+  enum Lang : uint8_t { LANG_EN, LANG_TR, LANG_COUNT };
+  // Results are one byte per day since the launch day; 4096 days is 11 years.
   static constexpr int MAX_RESULTS = 4096;
 
-  // Pack.
+  // Pack of the current language.
+  Lang lang = LANG_EN;
   connections::PackReader pack;
   HalFile indexFile;
   HalFile dataFile;
   bool packOpen = false;
-  uint32_t firstDate = 0;
-  uint32_t lastDate = 0;
 
-  // Results, held whole in RAM (~1.2 KB used, 4 KB buffer) so the home, the
-  // calendar and "random unplayed" never touch the card per day.
+  // Results of the current language, held whole in RAM (4 KB) so the home,
+  // the calendar and Random never touch the card per day.
   std::unique_ptr<uint8_t[]> results;
   int resultsLength = 0;
   connections::Summary summary;
 
   Screen screen = Screen::HOME;
   int homeSelected = HOME_TODAY;
-  uint32_t today = 0;  // YYYYMMDD, 0 when the clock is unknown
+  uint32_t today = 0;         // YYYYMMDD: the local date, else the last one seen
+  bool clockKnown = false;    // false: `today` is the last date seen, not the clock's
+  uint32_t lastSeenDate = 0;  // persisted so an unset clock keeps the latest daily
   uint32_t rng = 1;
 
   // Current puzzle.
@@ -82,12 +87,6 @@ class ConnectionsActivity final : public Activity {
   // Archive.
   uint32_t archiveDate = 0;
 
-  // Update.
-  UpdateStep updateStep = UpdateStep::CONNECT;
-  const char* updateError = "";
-  int updateAccepted = 0;
-  bool wifiStartedHere = false;
-
   // Held-direction repeat.
   MappedInputManager::Button heldButton = MappedInputManager::Button::Back;
   unsigned long nextRepeatMs = 0;
@@ -96,18 +95,26 @@ class ConnectionsActivity final : public Activity {
   bool cleanNext = true;
   int framesSinceClean = 0;
 
-  // Pack and results (ConnectionsActivity.cpp).
+  // Language, pack and results (ConnectionsActivity.cpp).
+  void loadPrefs();
+  void savePrefs() const;
+  void switchLanguage(Lang next);
+  void openLanguage();
   bool openPack();
   void closePack();
   void loadResults();
   void writeResult(uint32_t date, const connections::Record& record);
   connections::Record resultFor(uint32_t date) const;
   void refreshToday();
-  int todayIndex() const;
+  uint32_t launchDate() const;
+  int dayIndex(uint32_t date) const;  // days since the launch day, -1 before it
+  int dailyNumber(uint32_t date) const { return dayIndex(date) + 1; }
   int unplayedCount() const;
 
   // Game.
-  bool openPuzzle(int index);
+  bool openDaily(uint32_t date);
+  bool readDaily(uint32_t date, connections::Puzzle& out) const;
+  void restoreSavedGame();
   void saveGame() const;
   bool loadGame(const connections::Puzzle& puzzle);
   void finishGame();
@@ -119,12 +126,6 @@ class ConnectionsActivity final : public Activity {
   int cursorTile() const { return cursorRow < boardRows() ? cursorRow * connections::kMembers + cursorCol : -1; }
   void focusAction(Action action);
 
-  // Update.
-  void startUpdate();
-  void runConnect();
-  void runDownload();
-  void stopWifi();
-
   // Navigation.
   void showScreen(Screen next);
   void openHomeItem();
@@ -134,21 +135,22 @@ class ConnectionsActivity final : public Activity {
   void handleResult();
   void handleArchive();
   void handleStats();
-  void handleUpdate();
   bool repeatPress(MappedInputManager::Button button);
 
   // Drawing (ConnectionsRender.cpp).
+  const char* title() const;
   void renderHome() const;
   void renderGame() const;
   void renderResult() const;
   void renderArchive() const;
   void renderStats() const;
-  void renderUpdate() const;
   void drawHeader(const char* title, const char* subtitle) const;
+  void drawLanguageSwitch(int x, int y, bool focused) const;
   void drawGroupBar(int x, int y, int w, int h, const connections::Group& group, int groupIndex, bool solid) const;
-  void drawTile(int tile, int fontIndex, int x, int y, int w, int h) const;
+  void drawTile(int tile, int x, int y, int w, int h) const;
   void drawActions(int y, int h) const;
   void drawGuessGrid(int x, int y, int cell) const;
   void drawStatTiles(int y) const;
   void drawRecentStrip(int x, int y, int width) const;
+  void formatPuzzleLabel(uint32_t date, const char* dateFormat, char* out, int size) const;
 };

@@ -1,5 +1,5 @@
-// Drawing for ConnectionsActivity: home, board, result card, archive calendar,
-// statistics and the update screen, all 1-bit.
+// Drawing for ConnectionsActivity: home, board, result card, archive calendar
+// and statistics, all 1-bit.
 #include <I18n.h>
 
 #include <algorithm>
@@ -69,69 +69,120 @@ void formatDate(const uint32_t date, const char* format, char* out, const size_t
 
 constexpr int TILE_FONTS[3] = {UI_12_FONT_ID, UI_10_FONT_ID, SMALL_FONT_ID};
 constexpr int TILE_PAD = 8;
+constexpr int TILE_TEXT = connections::kMaxWordLen + 2;  // a line plus the break hyphen
 
 EpdFontFamily::Style tileStyle(const int font) {
   return font == SMALL_FONT_ID ? EpdFontFamily::REGULAR : EpdFontFamily::BOLD;
 }
 
-// Splits at the space or hyphen nearest the middle (a hyphen stays on the first
-// line); false when there is none.
-bool splitWord(const char* text, char* first, char* second, const int size) {
-  const char* split = nullptr;
-  const int length = static_cast<int>(strlen(text));
-  for (int i = 1; i < length - 1; i++) {
-    if (text[i] != ' ' && text[i] != '-') continue;
-    if (!split || std::abs(i - length / 2) < std::abs(static_cast<int>(split - text) - length / 2)) split = text + i;
+// How a word sits on its tile: a font and one line, or two.
+struct TileText {
+  int fontIndex = 2;
+  char first[TILE_TEXT] = {};
+  char second[TILE_TEXT] = {};
+};
+
+// Byte offsets of the codepoints of `text` (UTF-8) plus the end; returns the count.
+int codepoints(const char* text, uint16_t* cps, uint8_t* starts, const int max) {
+  int n = 0, at = 0;
+  const auto* bytes = reinterpret_cast<const unsigned char*>(text);
+  while (bytes[at] && n < max) {
+    const unsigned char lead = bytes[at];
+    const int len = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xE ? 3 : 4;
+    uint32_t cp = len == 1 ? lead : len == 2 ? lead & 0x1F : len == 3 ? lead & 0x0F : lead & 0x07;
+    for (int k = 1; k < len && bytes[at + k]; k++) cp = (cp << 6) | (bytes[at + k] & 0x3F);
+    starts[n] = static_cast<uint8_t>(at);
+    cps[n++] = static_cast<uint16_t>(cp > 0xFFFF ? 0xFFFF : cp);
+    for (int k = 0; k < len && bytes[at]; k++) at++;
   }
-  if (!split) return false;
-  const int head = std::min(static_cast<int>(split - text) + (*split == '-' ? 1 : 0), size - 1);
-  memcpy(first, text, head);
-  first[head] = '\0';
-  snprintf(second, size, "%s", split + 1);
-  return true;
+  starts[n] = static_cast<uint8_t>(at);
+  return n;
 }
 
-// Index into TILE_FONTS of the largest font that fits `text` on one line or two.
-int fitIndex(const GfxRenderer& r, const char* text, const int room) {
-  char first[40], second[40];
-  const bool split = splitWord(text, first, second, sizeof(first));
-  for (int i = 0; i < 3; i++) {
-    const int font = TILE_FONTS[i];
-    if (r.getTextWidth(font, text, tileStyle(font)) <= room) return i;
-    if (split &&
-        std::max(r.getTextWidth(font, first, tileStyle(font)), r.getTextWidth(font, second, tileStyle(font))) <= room) {
-      return i;
-    }
+bool isVowel(const uint16_t cp) {
+  switch (cp) {
+    case 'A':
+    case 'E':
+    case 'I':
+    case 'O':
+    case 'U':
+    case 0x130:
+    case 0xC2:
+    case 0xCE:
+    case 0xD6:
+    case 0xDB:
+    case 0xDC:  // İ Â Î Ö Û Ü
+      return true;
+    default:
+      return false;
   }
-  return 2;
 }
 
-// Draws a word centred in its tile in the board's font: one line, else two at a
-// space or hyphen, else cut short.
-void drawFitted(const GfxRenderer& r, const char* text, const int fontIndex, const int x, const int y, const int w,
-                const int h, const bool black) {
-  const int font = TILE_FONTS[fontIndex];
-  const int room = w - TILE_PAD;
+bool isLetter(const uint16_t cp) {
+  return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= 0xC0 && cp < 0xFFFF);
+}
+
+// Codepoint index of the break nearest the middle: at a space or hyphen, or
+// (syllable) before a consonant followed by a vowel, which is where Turkish
+// splits syllables. -1 when there is none.
+int findBreak(const uint16_t* cps, const int n, const bool syllable) {
+  int best = -1;
+  for (int i = 1; i < n - 1; i++) {
+    const bool ok = syllable ? i >= 2 && i <= n - 2 && isLetter(cps[i]) && !isVowel(cps[i]) && isVowel(cps[i + 1]) &&
+                                   isLetter(cps[i - 1])
+                             : cps[i] == ' ' || cps[i] == '-';
+    if (ok && (best < 0 || std::abs(i - n / 2) < std::abs(best - n / 2))) best = i;
+  }
+  return best;
+}
+
+// The largest tile font the word fits in: one line, else two at a space or
+// hyphen, else two at a syllable break with a hyphen, else cut short in the
+// smallest font. scripts/gen_connections_tr.py mirrors this to check the pack.
+TileText fitTile(const GfxRenderer& r, const char* text, const int room) {
+  static constexpr struct {
+    int fontIndex;
+    bool hyphenate;
+  } ATTEMPTS[] = {{0, false}, {1, false}, {0, true}, {1, true}, {2, false}, {2, true}};
+  uint16_t cps[TILE_TEXT];
+  uint8_t starts[TILE_TEXT + 1];
+  const int n = codepoints(text, cps, starts, TILE_TEXT - 1);
+  const int spaceBreak = findBreak(cps, n, false);
+  const int syllableBreak = spaceBreak < 0 ? findBreak(cps, n, true) : -1;
+  TileText out;
+  for (const auto& attempt : ATTEMPTS) {
+    const int font = TILE_FONTS[attempt.fontIndex];
+    const auto style = tileStyle(font);
+    out.fontIndex = attempt.fontIndex;
+    snprintf(out.first, sizeof(out.first), "%s", text);
+    out.second[0] = '\0';
+    if (r.getTextWidth(font, out.first, style) <= room) return out;
+    const int at = spaceBreak >= 0 ? spaceBreak : attempt.hyphenate ? syllableBreak : -1;
+    if (at < 0) continue;
+    const bool keepHyphen = spaceBreak >= 0 && cps[at] == '-';
+    const int headBytes = spaceBreak >= 0 ? starts[at] + (keepHyphen ? 1 : 0) : starts[at];
+    snprintf(out.first, sizeof(out.first), "%.*s%s", headBytes, text, spaceBreak >= 0 ? "" : "-");
+    snprintf(out.second, sizeof(out.second), "%s", text + starts[at] + (spaceBreak >= 0 ? 1 : 0));
+    if (std::max(r.getTextWidth(font, out.first, style), r.getTextWidth(font, out.second, style)) <= room) return out;
+  }
+  out.fontIndex = 2;
+  const std::string cut = r.truncatedText(SMALL_FONT_ID, text, room, tileStyle(SMALL_FONT_ID));
+  snprintf(out.first, sizeof(out.first), "%s", cut.c_str());
+  out.second[0] = '\0';
+  return out;
+}
+
+// Draws a fitted word centred in its tile.
+void drawFitted(const GfxRenderer& r, const TileText& text, const int x, const int y, const int w, const int h,
+                const bool black) {
+  const int font = TILE_FONTS[text.fontIndex];
+  const auto style = tileStyle(font);
   const int lh = r.getLineHeight(font);
-  const int tw = r.getTextWidth(font, text, tileStyle(font));
-  if (tw <= room) {
-    r.drawText(font, x + (w - tw) / 2, y + (h - lh) / 2, text, black, tileStyle(font));
-    return;
-  }
-  char first[40], second[40];
-  if (splitWord(text, first, second, sizeof(first))) {
-    const int w1 = r.getTextWidth(font, first, tileStyle(font));
-    const int w2 = r.getTextWidth(font, second, tileStyle(font));
-    if (std::max(w1, w2) <= room) {
-      const int top = y + (h - 2 * lh) / 2;
-      r.drawText(font, x + (w - w1) / 2, top, first, black, tileStyle(font));
-      r.drawText(font, x + (w - w2) / 2, top + lh, second, black, tileStyle(font));
-      return;
-    }
-  }
-  const std::string cut = r.truncatedText(font, text, room, tileStyle(font));
-  const int cw = r.getTextWidth(font, cut.c_str(), tileStyle(font));
-  r.drawText(font, x + (w - cw) / 2, y + (h - lh) / 2, cut.c_str(), black, tileStyle(font));
+  const int lines = text.second[0] ? 2 : 1;
+  const int top = y + (h - lines * lh) / 2;
+  r.drawText(font, x + (w - r.getTextWidth(font, text.first, style)) / 2, top, text.first, black, style);
+  if (lines == 2)
+    r.drawText(font, x + (w - r.getTextWidth(font, text.second, style)) / 2, top + lh, text.second, black, style);
 }
 
 void drawPill(const GfxRenderer& r, const char* text, const int y) {
@@ -298,33 +349,67 @@ void ConnectionsActivity::drawRecentStrip(const int x, const int y, const int wi
 
 // ---- home ---------------------------------------------------------------------
 
+const char* ConnectionsActivity::title() const {
+  return lang == LANG_TR ? tr(STR_CONN_TITLE_TR) : tr(STR_CONN_TITLE_EN);
+}
+
+// "Daily #N  ·  <date>" for headers.
+void ConnectionsActivity::formatPuzzleLabel(const uint32_t date, const char* dateFormat, char* out,
+                                            const int size) const {
+  char number[24], when[32];
+  snprintf(number, sizeof(number), tr(STR_CONN_DAILY_NUM), dailyNumber(date));
+  formatDate(date, dateFormat, when, sizeof(when));
+  snprintf(out, size, "%s  ·  %s", number, when);
+}
+
+// Two segments, English | Türkçe, the current one filled.
+void ConnectionsActivity::drawLanguageSwitch(const int x, const int y, const bool focused) const {
+  constexpr int H = 30;
+  const char* names[LANG_COUNT] = {tr(STR_CONN_LANG_EN), tr(STR_CONN_LANG_TR)};
+  int segW = 0;
+  for (const char* name : names) segW = std::max(segW, renderer.getTextWidth(UI_10_FONT_ID, name, EpdFontFamily::BOLD));
+  segW += 28;
+  renderer.drawRoundedRect(x, y, 2 * segW, H, 2, H / 2, true);
+  for (int i = 0; i < LANG_COUNT; i++) {
+    const bool on = i == lang;
+    const int sx = x + i * segW;
+    if (on) renderer.fillRoundedRect(sx, y, segW, H, H / 2, Color::Black);
+    const auto style = on ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    const int tw = renderer.getTextWidth(UI_10_FONT_ID, names[i], style);
+    renderer.drawText(UI_10_FONT_ID, sx + (segW - tw) / 2, y + (H - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
+                      names[i], !on, style);
+  }
+  if (focused) drawFocus(renderer, x, y, 2 * segW, H, false);
+}
+
 void ConnectionsActivity::renderHome() const {
   const int width = renderer.getScreenWidth();
   renderer.clearScreen();
 
   drawMenuIcon(renderer, SIDE, 16, 56);
-  renderer.drawText(NOTOSANS_18_FONT_ID, SIDE + 72, 8, tr(STR_PLAY_CONNECTIONS), true, EpdFontFamily::BOLD);
-  renderer.drawText(UI_10_FONT_ID, SIDE + 72, 50, tr(STR_CONN_TAGLINE));
+  renderer.drawText(NOTOSANS_18_FONT_ID, SIDE + 72, 2, title(), true, EpdFontFamily::BOLD);
+  drawLanguageSwitch(SIDE + 72, 54, homeSelected == HOME_LANG);
 
-  drawStatTiles(88);
-  renderer.drawText(SMALL_FONT_ID, SIDE, 158, tr(STR_CONN_RECENT));
-  drawRecentStrip(SIDE, 180, width - 2 * SIDE);
+  drawStatTiles(100);
+  renderer.drawText(SMALL_FONT_ID, SIDE, 166, tr(STR_CONN_RECENT));
+  drawRecentStrip(SIDE, 188, width - 2 * SIDE);
 
-  const int top = 220;
+  const int top = 230;
   constexpr int ITEM_GAP = 10;
-  const int itemH = std::min(92, (hintsTop(renderer) - 12 - top - ITEM_GAP * (HOME_ITEMS - 1)) / HOME_ITEMS);
-  const int todayIdx = todayIndex();
-  uint32_t todayDate = 0;
-  if (todayIdx >= 0) pack.dateAt(todayIdx, todayDate);
+  constexpr int ROWS = HOME_ITEMS - HOME_TODAY;
+  const int itemH = std::min(96, (hintsTop(renderer) - 12 - top - ITEM_GAP * (ROWS - 1)) / ROWS);
+  const connections::Record todayRecord = resultFor(today);
+  char dailyLabel[24];
+  snprintf(dailyLabel, sizeof(dailyLabel), tr(STR_CONN_DAILY_NUM), dailyNumber(today));
 
-  for (int i = 0; i < HOME_ITEMS; i++) {
-    const int y = top + i * (itemH + ITEM_GAP);
+  for (int i = HOME_TODAY; i < HOME_ITEMS; i++) {
+    const int y = top + (i - HOME_TODAY) * (itemH + ITEM_GAP);
     const int x = SIDE, w = width - 2 * SIDE;
     const bool focused = i == homeSelected;
     renderer.drawRoundedRect(x, y, w, itemH, focused ? 3 : 1, 10, true);
     constexpr int ICON = 44;
     const int ix = x + 16, iy = y + (itemH - ICON) / 2;
-    char title[48] = {}, line[80] = {};
+    char title[64] = {}, line[80] = {};
     switch (i) {
       case HOME_TODAY: {
         renderer.drawRoundedRect(ix, iy + 4, ICON, ICON - 4, 2, 6, true);
@@ -332,43 +417,48 @@ void ConnectionsActivity::renderHome() const {
         renderer.fillRect(ix + 11, iy, 4, 10, true);
         renderer.fillRect(ix + ICON - 15, iy, 4, 10, true);
         char day[4];
-        snprintf(day, sizeof(day), "%u", static_cast<unsigned>(todayDate % 100));
+        snprintf(day, sizeof(day), "%u", static_cast<unsigned>(today % 100));
         const int dw = renderer.getTextWidth(UI_10_FONT_ID, day, EpdFontFamily::BOLD);
-        renderer.drawText(UI_10_FONT_ID, ix + (ICON - dw) / 2, iy + 19, todayDate ? day : "-", true,
-                          EpdFontFamily::BOLD);
-        const bool current = today != 0 && todayDate == today;
-        snprintf(title, sizeof(title), "%s", current || today == 0 ? tr(STR_CONN_TODAY) : tr(STR_CONN_LATEST));
+        renderer.drawText(UI_10_FONT_ID, ix + (ICON - dw) / 2, iy + 19, day, true, EpdFontFamily::BOLD);
+        char when[32];
+        formatDate(today, "%a, %b %d", when, sizeof(when));
+        snprintf(title, sizeof(title), clockKnown ? tr(STR_CONN_TODAY_ON) : tr(STR_CONN_LATEST_ON), when);
         if (!packOpen) {
-          snprintf(line, sizeof(line), "%s", tr(STR_CONN_NO_PACK));
+          snprintf(line, sizeof(line), "%s", tr(STR_CONN_NO_PACK_SD));
           break;
         }
-        const connections::Record record = resultFor(todayDate);
-        char when[24];
-        formatDate(todayDate, "%b %d", when, sizeof(when));
-        const bool inProgress = gameLoaded && game.puzzle().date == todayDate && !record.played &&
+        const bool inProgress = gameLoaded && game.puzzle().date == today && !todayRecord.played &&
                                 game.result() == connections::Result::Playing &&
                                 (game.solvedCount() > 0 || game.mistakes() > 0);
-        if (record.played && record.lost) {
-          snprintf(line, sizeof(line), "%s  ·  %s", when, tr(STR_CONN_MISSED));
-        } else if (record.played) {
-          snprintf(line, sizeof(line), tr(STR_CONN_SOLVED_MISTAKES), when, record.mistakes);
+        if (todayRecord.played && todayRecord.lost) {
+          snprintf(line, sizeof(line), "%s  ·  %s", dailyLabel, tr(STR_CONN_MISSED));
+        } else if (todayRecord.played) {
+          snprintf(line, sizeof(line), tr(STR_CONN_SOLVED_MISTAKES), dailyLabel, todayRecord.mistakes);
         } else if (inProgress) {
-          snprintf(line, sizeof(line), tr(STR_CONN_IN_PROGRESS), when, game.solvedCount());
+          snprintf(line, sizeof(line), tr(STR_CONN_IN_PROGRESS), dailyLabel, game.solvedCount());
         } else {
-          snprintf(line, sizeof(line), "%s  ·  %s", when, tr(STR_CONN_NEW));
+          snprintf(line, sizeof(line), "%s  ·  %s", dailyLabel, tr(STR_CONN_NEW));
         }
-        if (record.played && !record.lost) {
+        if (todayRecord.played && !todayRecord.lost) {
           const int cx = x + w - 34, cy = y + itemH / 2;
           renderer.drawLine(cx - 10, cy, cx - 3, cy + 8, 4, true);
           renderer.drawLine(cx - 3, cy + 8, cx + 12, cy - 10, 4, true);
         }
         break;
       }
-      case HOME_RANDOM:
+      case HOME_RANDOM: {
         drawDie(renderer, ix, iy, ICON);
         snprintf(title, sizeof(title), "%s", tr(STR_CONN_RANDOM));
-        snprintf(line, sizeof(line), tr(STR_CONN_UNPLAYED), unplayedCount());
+        const int left = unplayedCount();
+        if (!packOpen) {
+          snprintf(line, sizeof(line), "%s", tr(STR_CONN_NO_PACK_SD));
+        } else if (left > 0) {
+          snprintf(line, sizeof(line), tr(STR_CONN_PAST_UNPLAYED), left);
+        } else {
+          snprintf(line, sizeof(line), "%s", dayIndex(today) > 0 ? tr(STR_CONN_ALL_CAUGHT_UP) : tr(STR_CONN_NO_PAST));
+        }
         break;
+      }
       case HOME_ARCHIVE:
         for (int k = 0; k < 9; k++) {
           const int c = ICON / 3;
@@ -382,29 +472,12 @@ void ConnectionsActivity::renderHome() const {
         snprintf(title, sizeof(title), "%s", tr(STR_CONN_ARCHIVE));
         if (packOpen) {
           char since[24];
-          formatDate(firstDate, "%b %Y", since, sizeof(since));
-          snprintf(line, sizeof(line), tr(STR_CONN_PUZZLES_SINCE), pack.count(), since);
+          formatDate(launchDate(), "%b %d, %Y", since, sizeof(since));
+          snprintf(line, sizeof(line), tr(STR_CONN_DAILIES_SINCE), dailyNumber(today), since);
         } else {
-          snprintf(line, sizeof(line), "%s", tr(STR_CONN_NO_PACK));
+          snprintf(line, sizeof(line), "%s", tr(STR_CONN_NO_PACK_SD));
         }
         break;
-      case HOME_UPDATE: {
-        const int ax = ix + ICON / 2;
-        renderer.fillRect(ax - 4, iy + 2, 8, 22, true);
-        const int xs[3] = {ax - 14, ax + 14, ax};
-        const int ys[3] = {iy + 22, iy + 22, iy + 36};
-        renderer.fillPolygon(xs, ys, 3, true);
-        renderer.fillRect(ix + 4, iy + ICON - 5, ICON - 8, 4, true);
-        snprintf(title, sizeof(title), "%s", tr(STR_CONN_UPDATE));
-        if (packOpen) {
-          char newest[24];
-          formatDate(lastDate, "%b %d, %Y", newest, sizeof(newest));
-          snprintf(line, sizeof(line), tr(STR_CONN_NEWEST), newest);
-        } else {
-          snprintf(line, sizeof(line), "%s", tr(STR_CONN_GET_PUZZLES));
-        }
-        break;
-      }
       default: {
         static constexpr int BARS[3] = {18, 30, 42};
         for (int k = 0; k < 3; k++) renderer.fillRect(ix + 4 + k * 14, iy + ICON - BARS[k], 10, BARS[k], true);
@@ -415,20 +488,21 @@ void ConnectionsActivity::renderHome() const {
     }
     const int textX = ix + ICON + 24;
     const int textW = x + w - 56 - textX;
-    renderer.drawText(UI_12_FONT_ID, textX, y + itemH / 2 - 28, title, true,
-                      focused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    const auto titleStyle = focused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    renderer.drawText(UI_12_FONT_ID, textX, y + itemH / 2 - 28,
+                      renderer.truncatedText(UI_12_FONT_ID, title, textW, titleStyle).c_str(), true, titleStyle);
     renderer.drawText(UI_10_FONT_ID, textX, y + itemH / 2 + 4,
                       renderer.truncatedText(UI_10_FONT_ID, line, textW).c_str());
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const char* confirm = homeSelected == HOME_LANG ? tr(STR_CONN_SWITCH) : tr(STR_OPEN);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirm, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 // ---- board --------------------------------------------------------------------
 
-void ConnectionsActivity::drawTile(const int tile, const int fontIndex, const int x, const int y, const int w,
-                                   const int h) const {
+void ConnectionsActivity::drawTile(const int tile, const int x, const int y, const int w, const int h) const {
   const bool selected = game.isSelected(tile);
   const bool focused = finaleStage == 0 && tile == cursorTile();
   if (selected) {
@@ -436,7 +510,7 @@ void ConnectionsActivity::drawTile(const int tile, const int fontIndex, const in
   } else {
     renderer.drawRoundedRect(x, y, w, h, 2, 10, true);
   }
-  drawFitted(renderer, game.tileWord(tile), fontIndex, x, y, w, h, !selected);
+  drawFitted(renderer, fitTile(renderer, game.tileWord(tile), w - TILE_PAD), x, y, w, h, !selected);
   if (focused) drawFocus(renderer, x, y, w, h, selected);
 }
 
@@ -470,10 +544,9 @@ void ConnectionsActivity::renderGame() const {
   const BoardLayout l = boardLayout(renderer);
   renderer.clearScreen();
 
-  char subtitle[48], when[24];
-  formatDate(game.puzzle().date, "%b %d, %Y", when, sizeof(when));
-  snprintf(subtitle, sizeof(subtitle), "#%u  ·  %s", game.puzzle().id, when);
-  drawHeader(tr(STR_PLAY_CONNECTIONS), subtitle);
+  char subtitle[64];
+  formatPuzzleLabel(game.puzzle().date, "%b %d, %Y", subtitle, sizeof(subtitle));
+  drawHeader(title(), subtitle);
   GUI.drawSideButtonHints(renderer, tr(STR_WORDLE_ROW_UP), tr(STR_WORDLE_ROW_DOWN));
 
   const int gridW = width - 2 * BOARD_SIDE;
@@ -489,9 +562,8 @@ void ConnectionsActivity::renderGame() const {
     const int tileW = (gridW - (kMembers - 1) * GAP) / kMembers;
     for (int t = 0; t < game.tileCount(); t++) {
       const int row = bars + t / kMembers, col = t % kMembers;
-      // Long words step down a size on their own, as on the paper's board.
-      const int fontIndex = fitIndex(renderer, game.tileWord(t), tileW - TILE_PAD);
-      drawTile(t, fontIndex, BOARD_SIDE + col * (tileW + GAP), l.gridY + row * (l.rowH + GAP), tileW, l.rowH);
+      // Long words step down a size or break on their own, as on the paper's board.
+      drawTile(t, BOARD_SIDE + col * (tileW + GAP), l.gridY + row * (l.rowH + GAP), tileW, l.rowH);
     }
   }
 
@@ -576,10 +648,9 @@ void ConnectionsActivity::drawGuessGrid(const int x, const int y, const int cell
 void ConnectionsActivity::renderResult() const {
   const int width = renderer.getScreenWidth();
   renderer.clearScreen();
-  char text[64], when[24];
-  formatDate(game.puzzle().date, "%a, %b %d %Y", when, sizeof(when));
-  snprintf(text, sizeof(text), "#%u  ·  %s", game.puzzle().id, when);
-  drawHeader(tr(STR_PLAY_CONNECTIONS), text);
+  char text[64];
+  formatPuzzleLabel(game.puzzle().date, "%a, %b %d %Y", text, sizeof(text));
+  drawHeader(title(), text);
 
   const bool won = game.result() == connections::Result::Won;
   const char* headline = !won                   ? tr(STR_CONN_NEXT_TIME)
@@ -641,7 +712,7 @@ void ConnectionsActivity::renderArchive() const {
     const int slot = lead + day - 1;
     const int cx = gx + (slot % 7) * cell + 3, cy = gy + (slot / 7) * cell + 3, cs = cell - 6;
     const uint32_t date = first + static_cast<uint32_t>(day - 1);
-    const bool available = date >= firstDate && date <= lastDate;
+    const bool available = packOpen && dayIndex(date) >= 0 && date <= today;
     const connections::Record record = resultFor(date);
     char label[4];
     snprintf(label, sizeof(label), "%d", day);
@@ -669,19 +740,25 @@ void ConnectionsActivity::renderArchive() const {
 
   // Details of the focused day.
   const int infoY = gy + 6 * cell + 12;
-  char when[32], line[80];
+  char when[32], line[80], state[40], number[24];
   formatDate(archiveDate, "%A, %b %d", when, sizeof(when));
-  const int index = pack.indexOfDate(archiveDate);
+  const bool available = packOpen && dayIndex(archiveDate) >= 0;
   const connections::Record record = resultFor(archiveDate);
   renderer.drawText(UI_12_FONT_ID, SIDE, infoY, when, true, EpdFontFamily::BOLD);
-  if (index < 0) {
-    snprintf(line, sizeof(line), "%s", tr(STR_CONN_NOT_IN_PACK));
+  if (!available) {
+    snprintf(state, sizeof(state), "%s", tr(STR_CONN_NOT_IN_PACK));
   } else if (!record.played) {
-    snprintf(line, sizeof(line), "%s", tr(STR_CONN_NEW));
+    snprintf(state, sizeof(state), "%s", tr(STR_CONN_NEW));
   } else if (record.lost) {
-    snprintf(line, sizeof(line), "%s", tr(STR_CONN_MISSED));
+    snprintf(state, sizeof(state), "%s", tr(STR_CONN_MISSED));
   } else {
-    snprintf(line, sizeof(line), tr(STR_CONN_MISTAKES_MADE), record.mistakes);
+    snprintf(state, sizeof(state), tr(STR_CONN_MISTAKES_MADE), record.mistakes);
+  }
+  snprintf(number, sizeof(number), tr(STR_CONN_DAILY_NUM), dailyNumber(archiveDate));
+  if (available) {
+    snprintf(line, sizeof(line), "%s  ·  %s", number, state);
+  } else {
+    snprintf(line, sizeof(line), "%s", state);
   }
   renderer.drawText(UI_10_FONT_ID, SIDE, infoY + 32, line);
 
@@ -705,7 +782,7 @@ void ConnectionsActivity::renderArchive() const {
 
   GUI.drawSideButtonHints(renderer, tr(STR_CONN_WEEK_BACK), tr(STR_CONN_WEEK_ON));
   const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), index >= 0 ? tr(STR_OPEN) : "", tr(STR_CONN_DAY_BACK), tr(STR_CONN_DAY_ON));
+      mappedInput.mapLabels(tr(STR_BACK), available ? tr(STR_OPEN) : "", tr(STR_CONN_DAY_BACK), tr(STR_CONN_DAY_ON));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -714,7 +791,7 @@ void ConnectionsActivity::renderArchive() const {
 void ConnectionsActivity::renderStats() const {
   const int width = renderer.getScreenWidth();
   renderer.clearScreen();
-  drawHeader(tr(STR_WORDLE_STATS), tr(STR_PLAY_CONNECTIONS));
+  drawHeader(tr(STR_WORDLE_STATS), title());
 
   // Hero: puzzles solved.
   constexpr int HERO_Y = 60;
@@ -762,47 +839,6 @@ void ConnectionsActivity::renderStats() const {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-// ---- update -------------------------------------------------------------------
-
-void ConnectionsActivity::renderUpdate() const {
-  const int width = renderer.getScreenWidth();
-  renderer.clearScreen();
-  drawHeader(tr(STR_CONN_UPDATE), nullptr);
-  const int mid = renderer.getScreenHeight() / 2 - 80;
-  drawMenuIcon(renderer, (width - 72) / 2, mid - 100, 72);
-
-  char line[96] = {};
-  const char* title = "";
-  switch (updateStep) {
-    case UpdateStep::CONNECT:
-    case UpdateStep::PICKING:
-      title = tr(STR_INCOME_CONNECTING);
-      break;
-    case UpdateStep::DOWNLOAD:
-      title = tr(STR_CONN_DOWNLOADING);
-      snprintf(line, sizeof(line), "%s", tr(STR_CONN_DOWNLOAD_HINT));
-      break;
-    case UpdateStep::DONE: {
-      title = tr(STR_CONN_UPDATED);
-      char newest[24];
-      formatDate(lastDate, "%b %d, %Y", newest, sizeof(newest));
-      snprintf(line, sizeof(line), tr(STR_CONN_UPDATED_LINE), updateAccepted, newest);
-      break;
-    }
-    case UpdateStep::FAILED:
-      title = tr(STR_CONN_UPDATE_FAILED);
-      snprintf(line, sizeof(line), "%s", updateError);
-      break;
-  }
-  renderer.drawCenteredText(UI_12_FONT_ID, mid, title, true, EpdFontFamily::BOLD);
-  if (line[0]) renderer.drawCenteredText(UI_10_FONT_ID, mid + 36, line);
-  renderer.drawCenteredText(SMALL_FONT_ID, mid + 80, tr(STR_CONN_SOURCE));
-
-  const bool busy = updateStep == UpdateStep::CONNECT || updateStep == UpdateStep::DOWNLOAD;
-  const auto labels = mappedInput.mapLabels(busy ? "" : tr(STR_BACK), "", "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-}
-
 void ConnectionsActivity::render(RenderLock&& lock) {
   switch (screen) {
     case Screen::HOME:
@@ -819,9 +855,6 @@ void ConnectionsActivity::render(RenderLock&& lock) {
       break;
     case Screen::STATS:
       renderStats();
-      break;
-    case Screen::UPDATE:
-      renderUpdate();
       break;
   }
   const bool clean = cleanNext || ++framesSinceClean >= play::FRAMES_PER_CLEAN;
