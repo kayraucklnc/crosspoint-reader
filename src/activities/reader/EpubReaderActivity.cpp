@@ -44,6 +44,7 @@
 #include "activities/stats/ReadingStatsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookShelfActions.h"
 #include "util/BookmarkUtil.h"
 #include "util/ButtonNavigator.h"
 #include "util/ReadingStats.h"
@@ -928,6 +929,17 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_HOME: {
+      onGoHome();
+      return;
+    }
+    case EpubReaderMenuActivity::MenuAction::REMOVE_FROM_HOME: {
+      book_shelf::removeFromHome(epub->getPath());
+      onGoHome();
+      return;
+    }
+    case EpubReaderMenuActivity::MenuAction::FINISH_ARCHIVE: {
+      reading_stats::markFinished();
+      book_shelf::markFinishedAndArchive(epub->getPath());
       onGoHome();
       return;
     }
@@ -2744,7 +2756,10 @@ void EpubReaderActivity::activateMoreRow(int row) {
   onReaderMenuConfirm(action);
   // Actions that neither open a screen nor leave the reader (a sync with no
   // credentials, say) would otherwise leave the closed panel on screen.
-  if (action != MA::GO_HOME && action != MA::DELETE_CACHE) requestUpdate();
+  if (action != MA::GO_HOME && action != MA::DELETE_CACHE && action != MA::REMOVE_FROM_HOME &&
+      action != MA::FINISH_ARCHIVE) {
+    requestUpdate();
+  }
 }
 
 void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool savePosition) {

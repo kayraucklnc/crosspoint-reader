@@ -39,6 +39,12 @@ constexpr int ICON_SIZE = 32;
 // Neighbour covers are lightened by clearing a 4x4 Bayer share of their pixels.
 constexpr int RECESS_LEVEL = 9;
 constexpr uint8_t BAYER4[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+constexpr unsigned long HOLD_MS = 700;
+constexpr const char* ARROW_LEFT = "\xE2\x80\xB9";   // ‹
+constexpr const char* ARROW_RIGHT = "\xE2\x80\xBA";  // ›
+
+// The app-row tile survives trips into a book and back for this boot.
+int rememberedRow = 0;
 
 void lightenRect(const GfxRenderer& renderer, const int x, const int y, const int w, const int h) {
   for (int py = y; py < y + h; py++) {
@@ -63,9 +69,11 @@ void lightenShadow(const GfxRenderer& renderer, const int x, const int y, const 
   }
 }
 
+}  // namespace
+
 // Truncates `text` with "..." so it fits maxWidth.
-void fitText(const GfxRenderer& renderer, const int fontId, const char* text, const EpdFontFamily::Style style,
-             const int maxWidth, char* out, const size_t outSize) {
+void HomeActivity::fitText(const GfxRenderer& renderer, const int fontId, const char* text,
+                           const EpdFontFamily::Style style, const int maxWidth, char* out, const size_t outSize) {
   snprintf(out, outSize, "%s", text);
   size_t len = strlen(out);
   while (len > 3 && renderer.getTextWidth(fontId, out, style) > maxWidth) {
@@ -75,24 +83,31 @@ void fitText(const GfxRenderer& renderer, const int fontId, const char* text, co
     snprintf(out + len, outSize - len, "...");
   }
 }
-}  // namespace
 
 int HomeActivity::centerCoverHeight() const { return renderer.getScreenHeight() * 44 / 100; }
 // Neighbours sit a step back: their near edge is shorter than the centre cover.
 int HomeActivity::sideCoverHeight() const { return centerCoverHeight() * 86 / 100; }
 
+void HomeActivity::loadCarousel() {
+  // A deleted file leaves Home for good; a missing cache only rebuilds its cover.
+  if (RECENT_BOOKS.pruneMissing() && !RECENT_BOOKS.saveToFile()) LOG_ERR("HOME", "Failed to save recents");
+  std::vector<RecentBook> books;
+  books.reserve(MAX_CAROUSEL_BOOKS);
+  for (const RecentBook& book : RECENT_BOOKS.getBooks()) {
+    if (static_cast<int>(books.size()) >= MAX_CAROUSEL_BOOKS) break;
+    if (!LIBRARY_META.isArchived(book.path)) books.push_back(book);
+  }
+  RenderLock lock(*this);
+  recentBooks.swap(books);
+  progressCache.assign(recentBooks.size(), -2);
+  bookIndex = std::clamp(bookIndex, 0, static_cast<int>(recentBooks.size()));
+  coversPending = !recentBooks.empty();
+}
+
 void HomeActivity::onEnter() {
   Activity::onEnter();
   ordered_dither::mode = SETTINGS.imageDithering;
-
-  recentBooks.clear();
-  const auto& books = RECENT_BOOKS.getBooks();
-  recentBooks.reserve(std::min<size_t>(books.size(), MAX_CAROUSEL_BOOKS));
-  for (const RecentBook& book : books) {
-    if (static_cast<int>(recentBooks.size()) >= MAX_CAROUSEL_BOOKS) break;
-    if (!RecentBooksStore::isMissing(book) && !LIBRARY_META.isArchived(book.path)) recentBooks.push_back(book);
-  }
-  progressCache.assign(recentBooks.size(), -2);
+  loadCarousel();
 
   // The card shows the Library's size; reading the index header is one sector.
   {
@@ -104,13 +119,17 @@ void HomeActivity::onEnter() {
 
   // Coming back from the Library lands on its card.
   bookIndex = initialMenuItem == HomeMenuItem::LIBRARY ? static_cast<int>(recentBooks.size()) : 0;
-  highlight = NO_HIGHLIGHT;
-  if (initialMenuItem == HomeMenuItem::INCOME) highlight = 0;
-  if (initialMenuItem == HomeMenuItem::TRAINS) highlight = 1;
-  if (initialMenuItem == HomeMenuItem::PLAY) highlight = 2;
-  if (initialMenuItem == HomeMenuItem::SETTINGS_MENU) highlight = 3;
-  coversPending = !recentBooks.empty();
+  if (initialMenuItem == HomeMenuItem::INCOME) rememberedRow = 0;
+  if (initialMenuItem == HomeMenuItem::TRAINS) rememberedRow = 1;
+  if (initialMenuItem == HomeMenuItem::PLAY) rememberedRow = 2;
+  if (initialMenuItem == HomeMenuItem::SETTINGS_MENU) rememberedRow = 3;
+  highlight = std::clamp(rememberedRow, 0, ROW_COUNT - 1);
   requestUpdate();
+}
+
+void HomeActivity::onExit() {
+  popup.dismiss();
+  Activity::onExit();
 }
 
 std::string HomeActivity::thumbPath(const RecentBook& book, const int height) const {
@@ -149,7 +168,28 @@ int HomeActivity::bookProgress(const int index) {
   return progressCache[index];
 }
 
-void HomeActivity::activate() {
+const char* HomeActivity::rowLabel(const int row) const {
+  switch (row) {
+    case 0:
+      return tr(STR_INCOME);
+    case 1:
+      return tr(STR_TRAINS);
+    case 2:
+      return tr(STR_PLAY);
+    default:
+      return tr(STR_SETTINGS_TITLE);
+  }
+}
+
+void HomeActivity::readCenter() {
+  if (onLibraryCard()) {
+    activityManager.goToLibrary();
+  } else {
+    activityManager.goToReader(recentBooks[bookIndex].path);
+  }
+}
+
+void HomeActivity::openRow() {
   switch (highlight) {
     case 0:
       activityManager.goToIncome();
@@ -160,15 +200,9 @@ void HomeActivity::activate() {
     case 2:
       activityManager.goToPlay();
       return;
-    case 3:
+    default:
       activityManager.goToSettings();
       return;
-    default:
-      if (onLibraryCard()) {
-        activityManager.goToLibrary();
-      } else {
-        activityManager.goToReader(recentBooks[bookIndex].path);
-      }
   }
 }
 
@@ -190,32 +224,38 @@ void HomeActivity::flipBook(const int direction) {
 }
 
 void HomeActivity::moveHighlight(const int direction) {
-  if (highlight == NO_HIGHLIGHT) {
-    highlight = direction > 0 ? 0 : ROW_COUNT - 1;
-  } else {
-    highlight = (highlight + ROW_COUNT + direction) % ROW_COUNT;
-  }
+  highlight = (highlight + ROW_COUNT + direction) % ROW_COUNT;
+  rememberedRow = highlight;
   requestUpdate();
 }
 
 void HomeActivity::loop() {
+  if (sheet != Sheet::None) {
+    handleSheetInput();
+    return;
+  }
+  if (infoOpen) {
+    handleInfoInput();
+    return;
+  }
   if (coversPending && firstRenderDone) {
     ensureCovers();
     requestUpdate();
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    activate();
+  using Button = MappedInputManager::Button;
+  // Back is the book's button ("Read"); holding it opens the book's actions.
+  if (!onLibraryCard() && mappedInput.wasLongPressed(Button::Back, HOLD_MS)) {
+    showBookActions();
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    if (highlight != NO_HIGHLIGHT) {
-      highlight = NO_HIGHLIGHT;
-      requestUpdate();
-    } else if (!recentBooks.empty()) {
-      activityManager.goToReader(recentBooks[0].path);  // resume the most recent book
-    }
+  if (mappedInput.wasReleased(Button::Back)) {
+    readCenter();
+    return;
+  }
+  if (mappedInput.wasReleased(Button::Confirm)) {
+    openRow();
     return;
   }
 
@@ -282,6 +322,20 @@ bool HomeActivity::drawTilted(const RecentBook& book, const bool leftSide, const
   return true;
 }
 
+void HomeActivity::drawTiltedPlaceholder(const bool leftSide, const int nearX, const int top) const {
+  const int height = sideCoverHeight();
+  const int width = book_thumbs::generatedWidth(height) * cover_tilt::WIDTH_PERCENT / 100;
+  const int inset = height * (100 - cover_tilt::FAR_SCALE_PERCENT) / 200;
+  const int farX = leftSide ? nearX - width : nearX + width;
+  const int xs[] = {nearX, farX, farX, nearX};
+  const int ys[] = {top, top + inset, top + height - inset, top + height};
+  renderer.fillPolygon(xs, ys, 4, false);
+  for (int i = 0; i < 4; i++) {
+    const int j = (i + 1) % 4;
+    renderer.drawLine(xs[i], ys[i], xs[j], ys[j], 1, true);
+  }
+}
+
 void HomeActivity::renderCarousel(const int top, const int height) {
   const int screenWidth = renderer.getScreenWidth();
   const int centerX = screenWidth / 2;
@@ -293,9 +347,15 @@ void HomeActivity::renderCarousel(const int top, const int height) {
   // Neighbours stand apart from the centre cover; clip to the screen.
   const auto savedClip = renderer.getClipRect();
   renderer.setClipRect(0, 0, screenWidth, renderer.getScreenHeight());
-  if (bookIndex > 0) drawTilted(recentBooks[bookIndex - 1], true, centerX - centerWidth / 2 - GAP, sideTop, nullptr);
+  const int leftNear = centerX - centerWidth / 2 - GAP;
+  const int rightNear = centerX + centerWidth / 2 + GAP;
+  if (bookIndex > 0 && !drawTilted(recentBooks[bookIndex - 1], true, leftNear, sideTop, nullptr)) {
+    drawTiltedPlaceholder(true, leftNear, sideTop);
+  }
   if (bookIndex + 1 < count) {
-    drawTilted(recentBooks[bookIndex + 1], false, centerX + centerWidth / 2 + GAP, sideTop, nullptr);
+    if (!drawTilted(recentBooks[bookIndex + 1], false, rightNear, sideTop, nullptr)) {
+      drawTiltedPlaceholder(false, rightNear, sideTop);
+    }
   } else if (bookIndex + 1 == count) {
     // The Library card peeks in flat from the right edge, never tilted like a book.
     const int peekHeight = sideCoverHeight();
@@ -305,11 +365,7 @@ void HomeActivity::renderCarousel(const int top, const int height) {
 
   if (onLibraryCard()) {
     drawLibraryCard(centerX, top, centerHeight, false);
-    if (highlight == NO_HIGHLIGHT) {
-      const int pad = FOCUS_FRAME + 3;
-      renderer.drawRoundedRect(centerX - centerWidth / 2 - pad, top - pad, centerWidth + pad * 2,
-                               centerHeight + pad * 2, FOCUS_FRAME, 16, true);
-    }
+    renderReadCue(centerX, top + centerHeight, tr(STR_LIBRARY));
     renderDots(top, height);
     return;
   }
@@ -318,14 +374,31 @@ void HomeActivity::renderCarousel(const int top, const int height) {
   for (int i = SHADOW; i > 0; i--) {
     lightenShadow(renderer, centerX - centerWidth / 2 + i, top + i, centerWidth, centerHeight, SHADOW - i + 1);
   }
-  int drawnWidth = centerWidth;
-  drawCover(recentBooks[bookIndex], centerHeight, centerX, top, &drawnWidth);
-  if (highlight == NO_HIGHLIGHT) {
-    const int pad = FOCUS_FRAME + 3;
-    renderer.drawRoundedRect(centerX - drawnWidth / 2 - pad, top - pad, drawnWidth + pad * 2, centerHeight + pad * 2,
-                             FOCUS_FRAME, 6, true);
-  }
+  drawCover(recentBooks[bookIndex], centerHeight, centerX, top, nullptr);
+  renderReadCue(centerX, top + centerHeight, tr(STR_HOME_READ));
   renderDots(top, height);
+}
+
+// A small tab hung on the centre cover or card, worded like the Back hint
+// ("Read" / "Library"), so the button and what it opens read as one control.
+void HomeActivity::renderReadCue(const int centerX, const int coverBottom, const char* label) const {
+  constexpr int HEIGHT = 28;
+  constexpr int PAD = 12;
+  constexpr int TRIANGLE = 10;
+  constexpr int ICON_GAP = 7;
+  const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label, EpdFontFamily::BOLD);
+  const int width = PAD + TRIANGLE + ICON_GAP + textWidth + PAD;
+  const int x = centerX - width / 2;
+  const int y = coverBottom - HEIGHT / 2;
+  renderer.fillRoundedRect(x, y, width, HEIGHT, HEIGHT / 2, Color::White);
+  renderer.drawRoundedRect(x, y, width, HEIGHT, 2, HEIGHT / 2, true);
+  const int tx = x + PAD;
+  const int cy = y + HEIGHT / 2;
+  const int triX[] = {tx, tx + TRIANGLE, tx};
+  const int triY[] = {cy - TRIANGLE / 2 - 1, cy, cy + TRIANGLE / 2 + 1};
+  renderer.fillPolygon(triX, triY, 3, true);
+  renderer.drawText(UI_10_FONT_ID, tx + TRIANGLE + ICON_GAP, y + (HEIGHT - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
+                    label, true, EpdFontFamily::BOLD);
 }
 
 // One square per book, then a chevron for the Library card.
@@ -496,7 +569,7 @@ void HomeActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
   renderAppRows(screenHeight - metrics.buttonHintsHeight - 16);
-  const int carouselHeight = centerCoverHeight() + 28;
+  const int carouselHeight = centerCoverHeight() + 34;
 
   if (transitionDir != 0) {
     renderTransition(TOP_PAD);
@@ -510,11 +583,16 @@ void HomeActivity::render(RenderLock&&) {
     renderBookInfo(TOP_PAD + carouselHeight + 12);
   }
 
-  const bool onBook = highlight == NO_HIGHLIGHT;
-  const char* back = onBook ? (recentBooks.empty() ? "" : tr(STR_RESUME)) : tr(STR_BACK);
-  const char* confirm = onBook && onLibraryCard() ? tr(STR_LIBRARY) : tr(STR_OPEN);
-  const auto labels = mappedInput.mapLabels(back, confirm, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (infoOpen) {
+    renderInfoPanel();
+  } else if (popup.processRender(renderer, mappedInput)) {
+    firstRenderDone = true;
+    return;
+  } else {
+    const char* read = onLibraryCard() ? tr(STR_LIBRARY) : tr(STR_HOME_READ);
+    const auto labels = mappedInput.mapLabels(read, rowLabel(highlight), ARROW_LEFT, ARROW_RIGHT);
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
 
   renderer.displayBuffer(cleanInitialRefresh && !firstRenderDone ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
   firstRenderDone = true;

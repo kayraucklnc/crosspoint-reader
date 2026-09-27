@@ -107,7 +107,29 @@ Upon turning the device on for the first time, you will be placed on the **[Home
 
 ### 3.1 Home Screen
 
-The Home screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, **[Browse Files](#33-browse-files-screen)**, the **[Library](#34-library-screen)**, **[File Transfer](#35-file-transfer-screen)**, or **[Settings](#36-settings)**.
+The Home screen is the main entry point to the firmware. The top half is a carousel of your recent books, ending in a **See Library** card that opens the **[Library](#34-library-screen)**. Below it is a row of apps: **Income**, **Trains**, **Play** and **Settings**.
+
+Each button controls one part of the screen, so you never have to guess what is selected:
+
+| Button | Controls | What it does |
+| --- | --- | --- |
+| Side buttons (Up/Down) | Books | Flip to the previous / next book (the last stop is the **See Library** card). |
+| **Back** (hint: **Read**) | Books | Open the book in the middle of the carousel, where it resumes at your saved position. On the **See Library** card the hint reads **Library** and opens the Library. |
+| Hold **Back** | Books | Open the book's actions (see below). |
+| **Left** / **Right** (hints: ‹ ›) | App row | Move the highlight between Income, Trains, Play and Settings. One tile is always highlighted, and Home remembers it when you come back. |
+| **Confirm** (hint: the tile's name) | App row | Open the highlighted tile. The hint always names it, for example **Trains**. |
+
+A small **Read** tab hangs under the middle book (a **Library** tab under the card) to show which item the **Read** button opens. The hints follow **Remap Front Buttons** if you have changed it.
+
+Holding **Read** on a book opens its actions:
+
+- **Read** – open the book.
+- **Remove from Home** – take the book off the carousel. Your place, reading time and Library state are kept, and opening the book again brings it back.
+- **Mark finished & archive** – mark the book as finished and archive it. It leaves Home and appears in the Library's **Finished** and **Archived** views.
+- **Reset progress** – forget your place in the book (it will start from the beginning) and take it off Home. You are asked to confirm twice. Reading time is kept.
+- **Book info** – title, author, progress, time read, status and file name. **Read** (Confirm) opens the book from there; **Back** closes it.
+
+Books whose file has been deleted from the SD card are removed from Home automatically. If only a book's cache was deleted, the book stays and its cover is rebuilt.
 
 ### 3.2 Reading Mode
 
@@ -134,7 +156,7 @@ On a button-only device:
 
 - Press **Up/Down** (side buttons) to move one book at a time. Hold them to move a page at a time.
 - Press **Left/Right** to switch to the previous or next sort. Hold **Left** or **Right** to reverse the current sort.
-- Press **Confirm** to open the selected book. Hold **Confirm** for its options: **Open**, **Mark as finished** / **Mark as unfinished**, **Archive** / **Unarchive**, and **Delete**.
+- Press **Confirm** to open the selected book. Hold **Confirm** for its options: **Open**, **Mark as finished** / **Mark as unfinished**, **Archive** / **Unarchive**, **Remove from Home** (only while the book is on Home) and **Delete**.
 - Press **Back** to return Home. Hold **Back** for the **View** menu: show **All books**, only books you are **Reading**, **Finished** books or **Archived** books, **Search** by title or author, or **Refresh library** to rescan the card.
 
 Archiving hides a book from the Library and the Home carousel without moving the file; archived books are listed only in the **Archived** view. While a search is active the header shows the query, and **Back** clears it.
@@ -681,6 +703,8 @@ The full Reader Menu (**More** in Quick Settings) offers:
 - **Take screenshot** – Save a screenshot of the current page to the `screenshots/` folder.
 - **Show page as QR** – Display a QR code encoding the current reading position.
 - **Go Home** – Close the book and return to the Home screen.
+- **Remove from Home** – Close the book and take it off the Home carousel. Your place in the book is kept.
+- **Mark finished & archive** – Close the book, mark it as finished, archive it and return Home.
 - **Sync Progress** – Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)).
 - **Delete Book Cache** – Clear the cached layout data for the current book, forcing a re-index on next open.
 

@@ -22,9 +22,9 @@
 // filter (All / Reading / Finished / Archived; archived books only show under
 // Archived). Buttons follow the device: side Up/Down move one row (hold: a
 // page), front Left/Right step the sort tab (hold: reverse it), Confirm opens
-// the book (hold: Open / Finished / Archive / Delete), Back goes Home (hold:
-// the View menu with the filters, Search and Refresh). Touch boards tap rows,
-// tabs and the header icons.
+// the book (hold: Open / Finished / Archive / Remove from Home / Delete), Back
+// goes Home (hold: the View menu with the filters, Search and Refresh). Touch
+// boards tap rows, tabs and the header icons.
 //
 // Pages are whole screens (rows never scroll one at a time), so moving within a
 // page repaints only the two rows involved. Only the page on screen keeps its
@@ -44,6 +44,10 @@ class LibraryListActivity final : public Activity, protected UiAppHost {
   static constexpr freeink::ui::ActionId ACTION_SEARCH = 3;
   static constexpr freeink::ui::ActionId ACTION_BACK = 4;
   static constexpr freeink::ui::ActionId ACTION_MENU = 5;
+
+  // Rows of the hold-Confirm sheet; which ones show depends on the book.
+  enum class BookAction : uint8_t { Open, Finish, Archive, RemoveFromHome, Delete };
+  static constexpr int BOOK_ACTION_COUNT = 5;
 
   // One book on the current page.
   struct Row {

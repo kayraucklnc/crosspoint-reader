@@ -9,6 +9,7 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 
@@ -20,6 +21,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookShelfActions.h"
 
 using library_ui::Filter;
 using library_ui::Sort;
@@ -335,21 +337,33 @@ void LibraryListActivity::showBookActions() {
   if (slot < 0 || slot >= static_cast<int>(rows.size())) return;
   const Row& row = rows[static_cast<size_t>(slot)];
   const library_ui::Book& book = model.book(row.book);
-  const char* options[] = {tr(STR_OPEN), book.finished() ? tr(STR_LIB_MARK_UNFINISHED) : tr(STR_LIB_MARK_FINISHED),
-                           book.archived() ? tr(STR_LIB_UNARCHIVE) : tr(STR_LIB_ARCHIVE), tr(STR_DELETE)};
+  // "Remove from Home" is offered only while the book is on Home.
+  std::array<BookAction, BOOK_ACTION_COUNT> actions{};
+  const char* options[BOOK_ACTION_COUNT] = {};
+  int count = 0;
+  const auto add = [&](const BookAction action, const char* label) {
+    actions[count] = action;
+    options[count++] = label;
+  };
+  add(BookAction::Open, tr(STR_OPEN));
+  add(BookAction::Finish, book.finished() ? tr(STR_LIB_MARK_UNFINISHED) : tr(STR_LIB_MARK_FINISHED));
+  add(BookAction::Archive, book.archived() ? tr(STR_LIB_UNARCHIVE) : tr(STR_LIB_ARCHIVE));
+  if (book_shelf::isOnHome(row.path)) add(BookAction::RemoveFromHome, tr(STR_HOME_REMOVE));
+  add(BookAction::Delete, tr(STR_DELETE));
   const uint16_t id = row.book;
   const std::string path = row.path;
   const std::string title = row.title;
   app.clearTapFlash();
-  popup.show(tr(STR_LIBRARY), title.c_str(), options, 4, 0, [this, id, path, title](const int choice) {
+  popup.show(tr(STR_LIBRARY), title.c_str(), options, count, 0, [this, id, path, title, actions, count](int choice) {
     swallowHeldReleases();
     invalidateFrame();
+    if (choice < 0 || choice >= count) return;
     const library_ui::Book& current = model.book(id);
-    switch (choice) {
-      case 0:
+    switch (actions[static_cast<size_t>(choice)]) {
+      case BookAction::Open:
         openBook(path);
         return;
-      case 1: {
+      case BookAction::Finish: {
         // A finish that stats or progress imply needs an explicit override to undo.
         const bool implied = (current.flags & library_ui::Book::STATS_FINISHED) || current.progress >= 100;
         const bool finished = current.finished();
@@ -361,7 +375,7 @@ void LibraryListActivity::showBookActions() {
         applyArrangement(true);
         break;
       }
-      case 2: {
+      case BookAction::Archive: {
         const bool archived = current.archived();
         RenderLock lock(*this);
         model.setMetaFlags(id, LIBRARY_META.updateFlags(path, archived ? 0 : LibraryMetaStore::ARCHIVED,
@@ -369,11 +383,12 @@ void LibraryListActivity::showBookActions() {
         applyArrangement(true);
         break;
       }
-      case 3:
+      case BookAction::RemoveFromHome:
+        book_shelf::removeFromHome(path);
+        break;
+      case BookAction::Delete:
         promptDelete(path, title);
         return;
-      default:
-        break;
     }
     requestUpdate();
   });
@@ -418,7 +433,7 @@ void LibraryListActivity::promptDelete(const std::string& path, const std::strin
       LOG_DBG("LIB", "deleting %s", path.c_str());
       clearBookCache(path);
       if (!Storage.remove(path.c_str())) LOG_ERR("LIB", "cannot delete %s", path.c_str());
-      if (RECENT_BOOKS.removeByPath(path)) RECENT_BOOKS.saveToFile();
+      book_shelf::removeFromHome(path);
       LIBRARY_META.updateFlags(path, 0, 0xFF);
       loadFailed = !rebuildIndex() || !model.load(index);
       applySearch(query);
