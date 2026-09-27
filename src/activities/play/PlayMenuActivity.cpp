@@ -20,6 +20,7 @@
 #include "TriviaActivity.h"
 #include "VoxelActivity.h"
 #include "WordleActivity.h"
+#include "activities/xkcd/XkcdActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -51,6 +52,7 @@ constexpr PlayMenuActivity::Entry GAMES[] = {
     {StrId::STR_PLAY_JOKERS, StrId::STR_PLAY_JOKERS_DESC, &jokersIcon, &make<JokersActivity>},
     {StrId::STR_PLAY_VOXEL, StrId::STR_PLAY_VOXEL_DESC, &glyphs::voxel, &make<VoxelActivity>},
     {StrId::STR_PLAY_SKETCH, StrId::STR_PLAY_SKETCH_DESC, &glyphs::sketch, &make<SketchActivity>},
+    {StrId::STR_PLAY_XKCD, StrId::STR_PLAY_XKCD_DESC, &XkcdActivity::drawMenuIcon, &make<XkcdActivity>},
 };
 constexpr int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 

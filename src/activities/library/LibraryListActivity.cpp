@@ -17,6 +17,8 @@
 #include "LibraryMetaStore.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "activities/ActivityManager.h"
+#include "activities/browser/GetBooksActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
@@ -397,9 +399,10 @@ void LibraryListActivity::showBookActions() {
 
 void LibraryListActivity::showViewMenu() {
   const char* options[] = {tr(STR_LIB_FILTER_ALL),      tr(STR_LIB_FILTER_READING), tr(STR_LIB_FILTER_FINISHED),
-                           tr(STR_LIB_FILTER_ARCHIVED), tr(STR_LIBRARY_SEARCH),     tr(STR_LIBRARY_REBUILD)};
+                           tr(STR_LIB_FILTER_ARCHIVED), tr(STR_LIBRARY_SEARCH),     tr(STR_GET_BOOKS),
+                           tr(STR_LIBRARY_REBUILD)};
   app.clearTapFlash();
-  popup.show(tr(STR_LIB_VIEW), options, 6, static_cast<int>(filter), [this](const int choice) {
+  popup.show(tr(STR_LIB_VIEW), options, 7, static_cast<int>(filter), [this](const int choice) {
     swallowHeldReleases();
     invalidateFrame();
     if (choice >= 0 && choice < library_ui::FILTER_COUNT) {
@@ -407,11 +410,21 @@ void LibraryListActivity::showViewMenu() {
     } else if (choice == 4) {
       openSearch();
     } else if (choice == 5) {
+      openGetBooks();
+    } else if (choice == 6) {
       promptRebuild();
     }
     requestUpdate();
   });
   requestUpdate();
+}
+
+void LibraryListActivity::openGetBooks() {
+  if (auto getBooks = makeUniqueNoThrow<GetBooksActivity>(renderer, mappedInput)) {
+    activityManager.replaceActivity(std::move(getBooks));
+  } else {
+    LOG_ERR("LIB", "OOM: Get Books");
+  }
 }
 
 void LibraryListActivity::promptDelete(const std::string& path, const std::string& title) {

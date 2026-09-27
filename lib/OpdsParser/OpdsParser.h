@@ -2,6 +2,7 @@
 #include <Print.h>
 #include <expat.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,9 @@ struct OpdsEntry {
   std::string author;  // Only for books
   std::string href;    // Navigation URL or epub download URL
   std::string id;
+  // <summary>, else <content>; for XHTML content a "Summary:" paragraph wins.
+  std::string summary;
+  uint32_t size = 0;  // acquisition link's length="" in bytes, 0 when unknown
 };
 
 // Legacy alias for backward compatibility
@@ -59,6 +63,10 @@ class OpdsParser final : public Print {
   size_t write(const uint8_t*, size_t) override;
 
   void flush() override;
+
+  // Collect <summary>/<content> text up to `chars` per entry (0, the default,
+  // skips it so plain catalog browsing pays nothing for descriptions).
+  void setSummaryLimit(size_t chars) { summaryLimit = chars; }
 
   bool error() const;
   bool truncated() const { return feedTruncated; }
@@ -109,6 +117,19 @@ class OpdsParser final : public Print {
   bool inAuthorName = false;
   bool inId = false;
   bool collectCurrentEntry = false;
+  // Summary/content collection. XHTML content arrives as <p> paragraphs:
+  // paragraphText holds the open one so a "Summary:" paragraph can replace
+  // the text gathered so far even after that text reached its cap.
+  size_t summaryLimit = 0;
+  size_t summaryBudget = 0;  // chars the open element may still add
+  uint8_t summaryDepth = 0;
+  bool summaryHtml = false;    // type="html": markup arrives as escaped text
+  bool summaryAppend = false;  // <content> extending a short <summary>  // element nesting inside <summary>/<content>;
+                               // 0 = not collecting
+  bool inParagraph = false;
+  bool summaryLocked = false;  // a "Summary:" paragraph was found; ignore the rest
+  std::string paragraphText;
+  void finishParagraph();
 
   bool errorOccured = false;
   bool feedTruncated = false;

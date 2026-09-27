@@ -98,6 +98,7 @@ class LibraryListActivity final : public Activity, protected UiAppHost {
   void showViewMenu();
   void promptDelete(const std::string& path, const std::string& title);
   void openSearch();
+  void openGetBooks();
   void promptRebuild();
   void handleBack();
   void swallowHeldReleases();
