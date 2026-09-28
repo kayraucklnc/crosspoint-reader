@@ -43,6 +43,7 @@ void armTimer(const long seconds) {
   // Adds the RTC timer as a second wake source next to the power-button GPIO
   // that HalPowerManager::startDeepSleep() arms; whichever fires first wakes.
   esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(seconds) * 1000000ULL);
+  powerManager.keepBatteryOnForTimerWake(true);
 #endif
 }
 

@@ -23,6 +23,7 @@ class HalPowerManager {
   enum LockMode { None, NormalSpeed };
   LockMode currentLockMode = None;
   SemaphoreHandle_t modeMutex = nullptr;  // Protect access to currentLockMode
+  bool keepBatteryOn = false;             // set when a timer wake is armed for this sleep
 
  public:
 #if BOARD_HAS_PSRAM
@@ -41,6 +42,11 @@ class HalPowerManager {
   // Setup wake up GPIO and enter deep sleep
   // Should be called inside main loop() to handle the currentLockMode
   void startDeepSleep(HalGPIO& gpio) const;
+
+  // On the Xteink C3 boards sleep normally cuts the battery (GPIO13 LOW), which
+  // also stops the RTC timer. Call before startDeepSleep() when a timer wake is
+  // armed so the chip stays powered in real deep sleep and the timer can fire.
+  void keepBatteryOnForTimerWake(const bool on) { keepBatteryOn = on; }
 
   // Get battery percentage (range 0-100)
   uint16_t getBatteryPercentage() const;

@@ -79,13 +79,16 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
   if (gpio.isXteinkDevice()) {
     // GPIO13 gates the battery MOSFET on both Xteink C3 boards; driving it low
     // is the battery power-off (the SDK wake source still handles USB power).
+    // With a timer wake armed it is held HIGH instead: the chip then stays in
+    // real deep sleep on battery, so the RTC timer can wake it.
     // Release any surviving pad hold first: hold_en survives deep sleep via
     // the SDK's deepSleep() (esp_sleep_config_gpio_isolate +
     // gpio_deep_sleep_hold_en), and a held pad silently ignores the drive.
     gpio_hold_dis(XTEINK_C3_GPIO13);
     gpio_set_direction(XTEINK_C3_GPIO13, GPIO_MODE_OUTPUT);
-    gpio_set_level(XTEINK_C3_GPIO13, 0);
+    gpio_set_level(XTEINK_C3_GPIO13, keepBatteryOn ? 1 : 0);
     gpio_hold_en(XTEINK_C3_GPIO13);
+    LOG_INF("PWR", "Sleep: battery %s", keepBatteryOn ? "kept on for timer wake" : "off");
   }
 #endif
 
