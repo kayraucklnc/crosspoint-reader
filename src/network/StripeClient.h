@@ -4,6 +4,9 @@
 #include <ctime>
 #include <string>
 
+struct IncomeCache;
+struct IncomeMonth;
+
 // Income in USD. cents[0] is today, cents[4] is four days ago.
 struct IncomeSummary {
   static constexpr int DAY_COUNT = 5;
@@ -34,11 +37,19 @@ class StripeClient {
 
   // Last summary saved by fetchIncome() for this amount mode, for instant display.
   static bool loadCachedSummary(Amount amount, IncomeSummary& out);
+  // The whole month-to-date cache (closed days plus the last summary) for this amount mode.
+  static bool loadCache(Amount amount, IncomeCache& out);
+  // Mode byte closed months of this amount are cached under (income_history).
+  static uint8_t monthMode(Amount amount);
 
   // Blocking; requires WiFi. Re-fetches only the five-day window (plus any
   // closed days of this month missing from the SD cache) and updates the cache.
   static Result fetchIncome(Amount amount, IncomeSummary& out);
 
-  // Requests made by the last fetchIncome() call.
+  // Blocking; requires WiFi. Fetches one month that has ended, day by day, and
+  // stores it on SD (income_history) so it is never fetched again.
+  static Result fetchMonth(Amount amount, int year, int month, IncomeMonth& out);
+
+  // Requests made by the last fetchIncome() or fetchMonth() call.
   static int lastRequestCount();
 };

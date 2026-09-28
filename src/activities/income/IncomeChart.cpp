@@ -29,7 +29,7 @@ constexpr FillBand FILL_BANDS[] = {{22, 4}, {60, 2}, {100000, 1}};
 
 // Monotone cubic (Fritsch-Carlson) tangents: smooth, never overshooting a peak or dipping below zero.
 void monotoneTangents(const float* ys, const int n, float* m) {
-  float d[IncomeChartData::MAX_POINTS] = {};
+  float d[IncomeView::MAX_BUCKETS] = {};
   for (int i = 0; i < n - 1; i++) d[i] = ys[i + 1] - ys[i];
   m[0] = d[0];
   m[n - 1] = d[n - 2];
@@ -81,67 +81,118 @@ void drawDot(const GfxRenderer& renderer, const int cx, const int cy, const bool
   }
 }
 
-void dayLabel(const time_t dayStart, const bool isToday, char* buf, const int bufSize) {
-  if (isToday) {
-    snprintf(buf, bufSize, "%s", tr(STR_INCOME_TODAY));
-    return;
-  }
-  struct tm local;
-  localtime_r(&dayStart, &local);
-  strftime(buf, bufSize, "%a", &local);
-}
-}  // namespace
-
-void drawIncomeChart(const GfxRenderer& renderer, const IncomeChartData& data, const int x, const int y,
-                     const int width, const int height) {
-  const int n = data.count;
-  if (n < 2) return;
-
-  const int plotLeft = x + SIDE_PAD;
-  const int plotWidth = width - SIDE_PAD * 2;
-  const int plotTop = y + TOP_PAD;
-  const int baseline = y + height - LABEL_HEIGHT;
-  const int plotHeight = baseline - plotTop;
-  const int64_t maxCents = std::max<int64_t>(1, *std::max_element(data.cents, data.cents + n));
-
-  float ys[IncomeChartData::MAX_POINTS];
-  float m[IncomeChartData::MAX_POINTS];
-  for (int i = 0; i < n; i++) ys[i] = static_cast<float>(data.cents[i]) / maxCents;
-  monotoneTangents(ys, n, m);
-
-  int prevX = plotLeft;
-  int prevY = baseline - static_cast<int>(ys[0] * plotHeight);
-  for (int px = plotLeft; px <= plotLeft + plotWidth; px++) {
-    const float u = static_cast<float>(px - plotLeft) * (n - 1) / plotWidth;
-    const float v = std::clamp(sampleCurve(ys, m, n, u), 0.0f, 1.0f);
+// Draws one contiguous run of points [first, last] as a smoothed, filled curve.
+void drawRun(const GfxRenderer& renderer, const float* values, const int first, const int last, const int plotLeft,
+             const int plotWidth, const int count, const int baseline, const int plotHeight) {
+  const int n = last - first + 1;
+  float m[IncomeView::MAX_BUCKETS];
+  monotoneTangents(values + first, n, m);
+  const int startX = plotLeft + plotWidth * first / (count - 1);
+  const int endX = plotLeft + plotWidth * last / (count - 1);
+  int prevX = startX;
+  int prevY = baseline - static_cast<int>(values[first] * plotHeight);
+  for (int px = startX; px <= endX; px++) {
+    const float u = static_cast<float>(px - startX) * (n - 1) / std::max(1, endX - startX);
+    const float v = std::clamp(sampleCurve(values + first, m, n, u), 0.0f, 1.0f);
     const int py = baseline - static_cast<int>(v * plotHeight);
     fillColumn(renderer, px, py, baseline);
     for (int w = -LINE_WIDTH / 2; w <= LINE_WIDTH / 2; w++) renderer.drawLine(prevX, prevY + w, px, py + w, true);
     prevX = px;
     prevY = py;
   }
-  renderer.fillRect(plotLeft, baseline, plotWidth + 1, 2, true);
+}
+}  // namespace
 
-  // Skip a value label when it would crowd its left neighbour's.
-  int lastLabelRight = -1000;
+void drawIncomeChart(const GfxRenderer& renderer, const IncomeView& view, const int x, const int y, const int width,
+                     const int height) {
+  const int n = view.count;
+  if (n < 2) return;
+  using State = IncomeView::State;
+
+  const int plotLeft = x + SIDE_PAD;
+  const int plotWidth = width - SIDE_PAD * 2;
+  const int plotTop = y + TOP_PAD;
+  const int baseline = y + height - LABEL_HEIGHT;
+  const int plotHeight = baseline - plotTop;
+  int64_t maxCents = 1;
   for (int i = 0; i < n; i++) {
-    const int cx = plotLeft + plotWidth * i / (n - 1);
-    const int cy = baseline - static_cast<int>(ys[i] * plotHeight);
-    const bool isToday = i == n - 1;
-    drawDot(renderer, cx, cy, isToday);
+    if (view.state[i] == State::DATA) maxCents = std::max(maxCents, view.cents[i]);
+  }
 
+  // Static, not stack: the chart only draws on the render task, one frame at a time.
+  static float ys[IncomeView::MAX_BUCKETS];
+  for (int i = 0; i < n; i++) ys[i] = static_cast<float>(view.cents[i]) / maxCents;
+  const auto pointX = [&](const int i) { return plotLeft + plotWidth * i / (n - 1); };
+
+  // The curve covers each run of buckets with data; future and missing ones leave a gap.
+  for (int first = 0; first < n;) {
+    if (view.state[first] != State::DATA) {
+      first++;
+      continue;
+    }
+    int last = first;
+    while (last + 1 < n && view.state[last + 1] == State::DATA) last++;
+    if (last > first) drawRun(renderer, ys, first, last, plotLeft, plotWidth, n, baseline, plotHeight);
+    first = last + 1;
+  }
+  // Solid baseline under buckets that have data, dotted under the rest.
+  for (int i = 0; i < n; i++) {
+    const int left = i == 0 ? plotLeft : (pointX(i - 1) + pointX(i)) / 2;
+    const int right = i == n - 1 ? plotLeft + plotWidth + 1 : (pointX(i) + pointX(i + 1)) / 2;
+    if (view.state[i] == State::DATA) {
+      renderer.fillRect(left, baseline, right - left, 2, true);
+    } else {
+      income_gfx::fillDither(renderer, left, baseline, right - left, 2, 6);
+    }
+  }
+
+  // Value labels by priority: the present bucket, the peak, then left to right,
+  // each skipped when it would crowd one already placed.
+  static int order[IncomeView::MAX_BUCKETS];
+  int orderCount = 0;
+  int peak = -1;
+  for (int i = 0; i < n; i++) {
+    if (view.state[i] == State::DATA && (peak < 0 || view.cents[i] > view.cents[peak])) peak = i;
+  }
+  if (view.current >= 0 && view.state[view.current] == State::DATA) order[orderCount++] = view.current;
+  if (peak >= 0 && peak != view.current) order[orderCount++] = peak;
+  for (int i = 0; i < n; i++) {
+    if (view.state[i] == State::DATA && i != view.current && i != peak) order[orderCount++] = i;
+  }
+  static int placedLeft[IncomeView::MAX_BUCKETS];
+  static int placedRight[IncomeView::MAX_BUCKETS];
+  int placed = 0;
+  for (int k = 0; k < orderCount; k++) {
+    const int i = order[k];
+    const int cx = pointX(i);
+    const int cy = baseline - static_cast<int>(std::clamp(ys[i], 0.0f, 1.0f) * plotHeight);
+    drawDot(renderer, cx, cy, i == view.current);
     char value[16];
-    income_gfx::formatUsdShort(data.cents[i], value, sizeof(value));
+    income_gfx::formatUsdShort(view.cents[i], value, sizeof(value));
     const int valueWidth = renderer.getTextWidth(UI_10_FONT_ID, value, EpdFontFamily::BOLD);
     const int valueX = cx - valueWidth / 2;
-    if (valueX > lastLabelRight + 8) {
-      renderer.drawText(UI_10_FONT_ID, valueX, cy - VALUE_GAP, value, true, EpdFontFamily::BOLD);
-      lastLabelRight = valueX + valueWidth;
+    bool crowded = false;
+    for (int j = 0; j < placed && !crowded; j++) {
+      crowded = valueX < placedRight[j] + 8 && valueX + valueWidth + 8 > placedLeft[j];
     }
+    // Zero buckets (before an account's first sale, say) keep their dot but not a "$0" label.
+    if (crowded || (view.cents[i] == 0 && i != view.current)) continue;
+    renderer.drawText(UI_10_FONT_ID, valueX, cy - VALUE_GAP, value, true, EpdFontFamily::BOLD);
+    placedLeft[placed] = valueX;
+    placedRight[placed] = valueX + valueWidth;
+    placed++;
+  }
 
-    char label[16];
-    dayLabel(data.dayStart[i], isToday, label, sizeof(label));
+  for (int i = 0; i < n; i++) {
+    const int cx = pointX(i);
+    const bool hasData = view.state[i] == State::DATA;
+    const bool highlighted = i == view.current;
+    const char* label = view.labels[i];
     const int labelWidth = renderer.getTextWidth(SMALL_FONT_ID, label);
-    renderer.drawText(SMALL_FONT_ID, cx - labelWidth / 2, baseline + 10, label);
+    const int labelX = cx - labelWidth / 2;
+    renderer.drawText(SMALL_FONT_ID, labelX, baseline + 10, label);
+    const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+    if (highlighted) renderer.fillRect(labelX, baseline + 10 + lineHeight, labelWidth, 2, true);
+    if (!hasData) income_gfx::fadeRect(renderer, labelX, baseline + 10, labelWidth, lineHeight);
   }
 }

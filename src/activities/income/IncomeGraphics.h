@@ -12,6 +12,9 @@ namespace income_gfx {
 // evenly spaced isolated dots, which stay crisp on a 1-bit e-ink panel.
 void fillDither(const GfxRenderer& renderer, int x, int y, int w, int h, int level);
 
+// Clears most pixels of a rect in the same ordered pattern, so black text in it reads as dimmed.
+void fadeRect(const GfxRenderer& renderer, int x, int y, int w, int h);
+
 // Width in pixels of `text` drawn with pixelSize-sized blocks.
 int pixelTextWidth(const char* text, int pixelSize);
 
@@ -35,7 +38,7 @@ int wrapText(const GfxRenderer& renderer, int fontId, const char* text, int maxW
 // Whole dollars with thousands separators ("$1,234"), cents dropped (rounded toward zero).
 void formatUsd(int64_t cents, char* buf, int bufSize);
 
-// Chart labels: "$950", "$4,321", then "$34k" from $10,000; rounded toward zero.
+// Chart labels: "$950", "$1.2k", "$34k", "$1.2M"; rounded toward zero.
 void formatUsdShort(int64_t cents, char* buf, int bufSize);
 
 }  // namespace income_gfx

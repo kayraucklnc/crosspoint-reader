@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <WiFi.h>
 
 #include <algorithm>
@@ -13,6 +14,8 @@
 #include "CrossPointSettings.h"
 #include "HttpDownloader.h"
 #include "IncomeCache.h"
+#include "IncomeCalendar.h"
+#include "IncomeHistory.h"
 #include "NetworkTime.h"
 #include "StripeChargeScanner.h"
 
@@ -40,16 +43,11 @@ uint8_t cacheMode(const StripeClient::Amount amount, const Source source) {
                               (source == Source::CHARGES ? CHARGES_SOURCE_BIT : 0));
 }
 
-// Day boundaries follow the device timezone, or UTC when incomeDayUtc is set
-// (Stripe's dashboard buckets by UTC day).
-bool utcDays() { return SETTINGS.incomeDayUtc != 0; }
+using income_calendar::calendarOf;
+using income_calendar::utcDays;
 
-void calendarOf(const time_t t, struct tm& out) {
-  if (utcDays()) {
-    gmtime_r(&t, &out);
-  } else {
-    localtime_r(&t, &out);
-  }
+Source sourceFor(const StripeClient::Amount amount) {
+  return amount == StripeClient::Amount::GROSS ? Source::CHARGES : Source::BALANCE;
 }
 
 time_t localMidnight(const time_t now, const int daysAgo, const int dayOfMonth = 0) {
@@ -89,15 +87,62 @@ bool recordValue(const StripeClient::Amount amount, const Source source, const S
   return true;
 }
 
+// A second balance currency (e.g. GBP), converted to USD at the first exchange
+// rate its charge rows carry in the same fetch.
+struct ForeignRate {
+  std::string currency;
+  double perUsd = 0;
+
+  int64_t toUsd(const int64_t foreignCents) const {
+    return static_cast<int64_t>(static_cast<double>(foreignCents) / perUsd + (foreignCents < 0 ? -0.5 : 0.5));
+  }
+};
+
+// How one record counts: in USD, in the foreign balance currency (converted
+// once the fetch is done), as a non-USD charge the charges list cannot value, or not at all.
+enum class Counted : uint8_t { NO, USD, FOREIGN, SKIPPED_NON_USD };
+
+Counted classify(const StripeClient::Amount amount, const Source source, const StripeCharge& record, ForeignRate& fx,
+                 int64_t& cents) {
+  if (source == Source::BALANCE && record.currency != "usd") {
+    if (fx.currency.empty()) fx.currency = record.currency;
+    if (record.currency != fx.currency) return Counted::NO;
+    if (fx.perUsd == 0 && record.exchangeRate > 0) fx.perUsd = record.exchangeRate;
+    StripeCharge asUsd = record;
+    asUsd.currency = "usd";
+    return recordValue(amount, source, asUsd, cents) ? Counted::FOREIGN : Counted::NO;
+  }
+  if (recordValue(amount, source, record, cents)) return Counted::USD;
+  // Only the charges list can hold other currencies without a USD value.
+  const bool skippedForeign = source == Source::CHARGES && record.currency != "usd" && record.status == "succeeded";
+  return skippedForeign ? Counted::SKIPPED_NON_USD : Counted::NO;
+}
+
+// Logs whether the foreign balance currency could be converted; false = its movements are left out.
+bool reportForeign(const ForeignRate& fx) {
+  if (fx.currency.empty()) return false;
+  if (fx.perUsd > 0) {
+    LOG_INF("STRIPE", "Converted %s balance at %.4f per USD", fx.currency.c_str(), fx.perUsd);
+    return true;
+  }
+  LOG_ERR("STRIPE", "No %s exchange rate in this fetch; %s movements left out", fx.currency.c_str(),
+          fx.currency.c_str());
+  return false;
+}
+
 // Streams every record created at or after `since` into onRecord.
+// `until` (0 = open-ended) is exclusive.
 StripeClient::Result fetchRecords(const Source source, const std::string& authorization, const time_t since,
-                                  const StripeChargeScanner::ChargeCallback& onRecord) {
+                                  const time_t until, const StripeChargeScanner::ChargeCallback& onRecord) {
   const char* base = source == Source::CHARGES ? CHARGES_URL : BALANCE_URL;
+  char untilParam[40] = "";
+  if (until > 0) snprintf(untilParam, sizeof(untilParam), "&created%%5Blt%%5D=%lld", static_cast<long long>(until));
   std::string startingAfter;
   for (int page = 0; page < MAX_PAGES; page++) {
     char url[256];
-    snprintf(url, sizeof(url), "%s?limit=%d&created%%5Bgte%%5D=%lld%s%s", base, PAGE_LIMIT,
-             static_cast<long long>(since), startingAfter.empty() ? "" : "&starting_after=", startingAfter.c_str());
+    snprintf(url, sizeof(url), "%s?limit=%d&created%%5Bgte%%5D=%lld%s%s%s", base, PAGE_LIMIT,
+             static_cast<long long>(since), untilParam,
+             startingAfter.empty() ? "" : "&starting_after=", startingAfter.c_str());
 
     StripeChargeScanner scanner(onRecord);
     int status = 0;
@@ -137,16 +182,23 @@ bool StripeClient::loadKey(std::string& outKey) {
   return !outKey.empty();
 }
 
-bool StripeClient::loadCachedSummary(const Amount amount, IncomeSummary& out) {
-  IncomeCache cache;
+bool StripeClient::loadCache(const Amount amount, IncomeCache& out) {
   // Either source's numbers are fine to show while the refresh runs.
-  if (!cache.load() || (cache.amountMode & ~CHARGES_SOURCE_BIT) != cacheMode(amount, Source::BALANCE) ||
-      !cache.hasSummary) {
+  if (!out.load() || (out.amountMode & ~CHARGES_SOURCE_BIT) != cacheMode(amount, Source::BALANCE) || !out.hasSummary) {
+    out = IncomeCache{};
     return false;
   }
+  return true;
+}
+
+bool StripeClient::loadCachedSummary(const Amount amount, IncomeSummary& out) {
+  IncomeCache cache;
+  if (!loadCache(amount, cache)) return false;
   out = cache.lastSummary;
   return true;
 }
+
+uint8_t StripeClient::monthMode(const Amount amount) { return cacheMode(amount, sourceFor(amount)); }
 
 int StripeClient::lastRequestCount() { return requestCount; }
 
@@ -199,11 +251,9 @@ StripeClient::Result fetchFrom(const StripeClient::Amount amount, const Source s
 
   int64_t fetchedByDay[IncomeCache::MAX_DAYS + 1] = {};
   uint16_t nonUsdByDay[IncomeCache::MAX_DAYS + 1] = {};
-  // A second balance currency (e.g. GBP), converted to USD once a charge row gives its rate.
   int64_t foreignByDay[IncomeCache::MAX_DAYS + 1] = {};
   int64_t foreignWindow[IncomeSummary::DAY_COUNT] = {};
-  std::string foreignCurrency;
-  double foreignPerUsd = 0;
+  ForeignRate fx;
   int futureRecords = 0;
   auto onRecord = [&](const StripeCharge& record) {
     // A record "from the future" means our clock is behind; never let it land in today.
@@ -211,38 +261,14 @@ StripeClient::Result fetchFrom(const StripeClient::Amount amount, const Source s
       futureRecords++;
       return;
     }
-    if (source == Source::BALANCE && record.currency != "usd") {
-      if (foreignCurrency.empty()) foreignCurrency = record.currency;
-      if (record.currency != foreignCurrency) return;
-      if (foreignPerUsd == 0 && record.exchangeRate > 0) foreignPerUsd = record.exchangeRate;
-      StripeCharge asUsd = record;
-      asUsd.currency = "usd";
-      int64_t foreignCents = 0;
-      if (!recordValue(amount, source, asUsd, foreignCents)) return;
-      for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) {
-        if (record.created >= fresh.dayStart[i]) {
-          foreignWindow[i] += foreignCents;
-          break;
-        }
-      }
-      if (record.created >= fresh.monthStart) {
-        const time_t created = static_cast<time_t>(record.created);
-        struct tm day;
-        calendarOf(created, day);
-        foreignByDay[day.tm_mday] += foreignCents;
-      }
-      return;
-    }
     int64_t cents = 0;
-    const bool counted = recordValue(amount, source, record, cents);
-    // Only the charges list can hold other currencies without a USD value.
-    const bool skippedForeign =
-        !counted && source == Source::CHARGES && record.currency != "usd" && record.status == "succeeded";
-    if (!counted && !skippedForeign) return;
+    const Counted kind = classify(amount, source, record, fx, cents);
+    if (kind == Counted::NO) return;
     for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) {
       if (record.created >= fresh.dayStart[i]) {
-        if (counted) fresh.cents[i] += cents;
-        if (skippedForeign) fresh.nonUsd[i]++;
+        if (kind == Counted::USD) fresh.cents[i] += cents;
+        if (kind == Counted::FOREIGN) foreignWindow[i] += cents;
+        if (kind == Counted::SKIPPED_NON_USD) fresh.nonUsd[i]++;
         break;
       }
     }
@@ -250,26 +276,18 @@ StripeClient::Result fetchFrom(const StripeClient::Amount amount, const Source s
       const time_t created = static_cast<time_t>(record.created);
       struct tm day;
       calendarOf(created, day);
-      if (counted) fetchedByDay[day.tm_mday] += cents;
-      if (skippedForeign) nonUsdByDay[day.tm_mday]++;
+      if (kind == Counted::USD) fetchedByDay[day.tm_mday] += cents;
+      if (kind == Counted::FOREIGN) foreignByDay[day.tm_mday] += cents;
+      if (kind == Counted::SKIPPED_NON_USD) nonUsdByDay[day.tm_mday]++;
     }
   };
 
-  const StripeClient::Result result = fetchRecords(source, "Bearer " + key, since, onRecord);
+  const StripeClient::Result result = fetchRecords(source, "Bearer " + key, since, 0, onRecord);
   if (result != StripeClient::Result::OK) return result;
   if (futureRecords > 0) LOG_ERR("STRIPE", "Ignored %d records dated after now; clock is behind", futureRecords);
-  if (!foreignCurrency.empty()) {
-    if (foreignPerUsd > 0) {
-      const auto toUsd = [foreignPerUsd](const int64_t foreignCents) {
-        return static_cast<int64_t>(static_cast<double>(foreignCents) / foreignPerUsd + (foreignCents < 0 ? -0.5 : 0.5));
-      };
-      for (int day = 1; day <= IncomeCache::MAX_DAYS; day++) fetchedByDay[day] += toUsd(foreignByDay[day]);
-      for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) fresh.cents[i] += toUsd(foreignWindow[i]);
-      LOG_INF("STRIPE", "Converted %s balance at %.4f per USD", foreignCurrency.c_str(), foreignPerUsd);
-    } else {
-      LOG_ERR("STRIPE", "No %s exchange rate in this fetch; %s movements left out", foreignCurrency.c_str(),
-              foreignCurrency.c_str());
-    }
+  if (reportForeign(fx)) {
+    for (int day = 1; day <= IncomeCache::MAX_DAYS; day++) fetchedByDay[day] += fx.toUsd(foreignByDay[day]);
+    for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) fresh.cents[i] += fx.toUsd(foreignWindow[i]);
   }
 
   for (int day = std::max(1, firstUnknown); firstUnknown > 0 && day <= lastClosedDay; day++) {
@@ -295,22 +313,28 @@ StripeClient::Result fetchFrom(const StripeClient::Amount amount, const Source s
 }
 }  // namespace
 
-StripeClient::Result StripeClient::fetchIncome(const Amount amount, IncomeSummary& out) {
+namespace {
+// Key, trusted clock and TLS heap, checked before every fetch.
+StripeClient::Result preflight(std::string& key, time_t& now) {
   requestCount = 0;
-  std::string key;
-  if (!loadKey(key)) return Result::NO_KEY;
-
-  time_t now = 0;
+  if (!StripeClient::loadKey(key)) return StripeClient::Result::NO_KEY;
   if (!network_time::ensure(now)) {
     LOG_ERR("STRIPE", "Clock not set; cannot bucket income by day");
-    return Result::NO_TIME;
+    return StripeClient::Result::NO_TIME;
   }
-
   if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
       ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
     LOG_ERR("STRIPE", "Not enough heap for TLS: free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
-    return Result::LOW_MEMORY;
+    return StripeClient::Result::LOW_MEMORY;
   }
+  return StripeClient::Result::OK;
+}
+}  // namespace
+
+StripeClient::Result StripeClient::fetchIncome(const Amount amount, IncomeSummary& out) {
+  std::string key;
+  time_t now = 0;
+  if (const Result ready = preflight(key, now); ready != Result::OK) return ready;
 
   // Gross matches Stripe's "Gross volume": successful charges less refunds. Balance
   // transactions miss charges that have not settled yet, so they undercount it.
@@ -335,4 +359,53 @@ StripeClient::Result StripeClient::fetchIncome(const Amount amount, IncomeSummar
   }
   if (amount != Amount::GROSS) return Result::FORBIDDEN;
   return fetchFrom(amount, Source::CHARGES, key, now, denied ? deniedAt : now, out);
+}
+
+StripeClient::Result StripeClient::fetchMonth(const Amount amount, const int year, const int month, IncomeMonth& out) {
+  out = IncomeMonth{};
+  std::string key;
+  time_t now = 0;
+  if (const Result ready = preflight(key, now); ready != Result::OK) return ready;
+
+  const time_t start = income_calendar::dayStart(year, month, 1);
+  const time_t end = income_calendar::dayStart(year, month + 1, 1);
+  if (end > now) {
+    LOG_ERR("STRIPE", "Month %04d-%02d has not ended; not caching it", year, month);
+    return Result::NO_TIME;
+  }
+
+  const Source source = sourceFor(amount);
+  // Foreign balance cents per day, converted once the fetch has found a rate.
+  auto foreignByDay = makeUniqueNoThrow<int64_t[]>(IncomeMonth::MAX_DAYS + 1);
+  if (!foreignByDay) {
+    LOG_ERR("STRIPE", "OOM: month buffer");
+    return Result::LOW_MEMORY;
+  }
+  std::fill_n(foreignByDay.get(), IncomeMonth::MAX_DAYS + 1, 0);
+  ForeignRate fx;
+  auto onRecord = [&](const StripeCharge& record) {
+    int64_t cents = 0;
+    const Counted kind = classify(amount, source, record, fx, cents);
+    if (kind == Counted::NO) return;
+    const time_t created = static_cast<time_t>(record.created);
+    struct tm day;
+    calendarOf(created, day);
+    if (day.tm_year + 1900 != year || day.tm_mon + 1 != month) return;  // outside [start, end)
+    if (kind == Counted::USD) out.cents[day.tm_mday] += cents;
+    if (kind == Counted::FOREIGN) foreignByDay[day.tm_mday] += cents;
+    if (kind == Counted::SKIPPED_NON_USD) out.nonUsd[day.tm_mday]++;
+  };
+  const Result result = fetchRecords(source, "Bearer " + key, start, end, onRecord);
+  if (result != Result::OK) return result;
+
+  const bool converted = reportForeign(fx);
+  const int days = income_calendar::daysInMonth(year, month);
+  for (int day = 1; day <= days; day++) {
+    const int64_t foreign = converted ? fx.toUsd(foreignByDay[day]) : 0;
+    out.set(day, out.cents[day] + foreign, out.nonUsd[day]);
+  }
+  income_history::save(income_calendar::monthKey(year, month), amount == Amount::NET, monthMode(amount), out);
+  LOG_INF("STRIPE", "Month %04d-%02d cached from %s with %d request(s)", year, month,
+          source == Source::CHARGES ? "charges" : "balance", requestCount);
+  return Result::OK;
 }

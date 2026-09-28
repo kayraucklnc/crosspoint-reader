@@ -47,6 +47,16 @@ int glyphAdvance(const char ch) { return isNarrow(ch) ? 3 : GLYPH_W; }
 void drawGlyphBlocks(const GfxRenderer& renderer, const Glyph& glyph, const int x, const int y, const int size,
                      const bool shadow);
 
+// Copies the UTF-8 character at `text` into `glyph` (null-terminated); returns its byte length.
+int nextGlyph(const char* text, char* glyph) {
+  const auto lead = static_cast<uint8_t>(text[0]);
+  const int length = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+  int i = 0;
+  for (; i < length && text[i] != '\0'; i++) glyph[i] = text[i];
+  glyph[i] = '\0';
+  return i;
+}
+
 void groupThousands(const long long value, char* buf, const int bufSize) {
   char digits[24];
   snprintf(digits, sizeof(digits), "%lld", value);
@@ -74,12 +84,20 @@ void fillDither(const GfxRenderer& renderer, const int x, const int y, const int
   }
 }
 
+void fadeRect(const GfxRenderer& renderer, const int x, const int y, const int w, const int h) {
+  for (int py = y; py < y + h; py++) {
+    for (int px = x; px < x + w; px++) {
+      if (BAYER4[py & 3][px & 3] < 10) renderer.drawPixel(px, py, false);
+    }
+  }
+}
+
 void drawTrackedLabel(const GfxRenderer& renderer, const int fontId, const int x, const int y, const char* text,
                       const int tracking) {
   int cursor = x;
-  char glyph[2] = {0, 0};
-  for (const char* p = text; *p; p++) {
-    glyph[0] = *p;
+  char glyph[5];
+  for (const char* p = text; *p;) {
+    p += nextGlyph(p, glyph);
     renderer.drawText(fontId, cursor, y, glyph, true, EpdFontFamily::BOLD);
     cursor += renderer.getTextWidth(fontId, glyph, EpdFontFamily::BOLD) + tracking;
   }
@@ -129,9 +147,9 @@ void drawPixelText(const GfxRenderer& renderer, const int x, const int y, const 
 
 int trackedLabelWidth(const GfxRenderer& renderer, const int fontId, const char* text, const int tracking) {
   int width = 0;
-  char glyph[2] = {0, 0};
-  for (const char* p = text; *p; p++) {
-    glyph[0] = *p;
+  char glyph[5];
+  for (const char* p = text; *p;) {
+    p += nextGlyph(p, glyph);
     width += renderer.getTextWidth(fontId, glyph, EpdFontFamily::BOLD) + tracking;
   }
   return width > 0 ? width - tracking : 0;
@@ -210,12 +228,21 @@ void formatUsdShort(const int64_t cents, char* buf, const int bufSize) {
   const bool negative = cents < 0;
   const long long dollars = (negative ? -cents : cents) / 100;
   const char* sign = negative && dollars > 0 ? "-" : "";
-  if (dollars >= 10000) {
+  if (dollars < 1000) {
+    snprintf(buf, bufSize, "%s$%lld", sign, dollars);
+  } else if (dollars < 10000) {
+    // One decimal, rounded toward zero; "$3k" rather than "$3.0k".
+    const long long tenths = dollars / 100;
+    if (tenths % 10 == 0) {
+      snprintf(buf, bufSize, "%s$%lldk", sign, tenths / 10);
+    } else {
+      snprintf(buf, bufSize, "%s$%lld.%lldk", sign, tenths / 10, tenths % 10);
+    }
+  } else if (dollars < 1000000) {
     snprintf(buf, bufSize, "%s$%lldk", sign, dollars / 1000);
   } else {
-    char whole[24];
-    groupThousands(dollars, whole, sizeof(whole));
-    snprintf(buf, bufSize, "%s$%s", sign, whole);
+    const long long tenths = dollars / 100000;
+    snprintf(buf, bufSize, "%s$%lld.%lldM", sign, tenths / 10, tenths % 10);
   }
 }
 

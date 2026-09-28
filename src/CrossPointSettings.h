@@ -268,6 +268,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t incomeAmount = 0;
   // Income day boundaries: 0 = device timezone, 1 = UTC (matches Stripe's dashboard)
   uint8_t incomeDayUtc = 0;
+  // Income chart range (IncomeRange): 0 = last 5 days, 1 = last 7 days, 2 = weeks of month, 3 = months of year
+  uint8_t incomeRange = 0;
   // Which /sleep wallpaper to show: WALLPAPER_MODE
   uint8_t wallpaperMode = WALLPAPER_RANDOM;
   // How the page leaves when the device goes to sleep: SLEEP_TRANSITION
