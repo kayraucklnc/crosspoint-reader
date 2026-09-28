@@ -63,6 +63,7 @@ bool syncSystemClockFromNtp() {
     ok = sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED;
     if (!ok) delay(100);
   }
+  if (!ok) esp_sntp_stop();
   setenv("TZ", savedTz[0] != '\0' ? savedTz : "UTC0", 1);
   tzset();
   return ok;
@@ -131,6 +132,10 @@ bool ensure(time_t& outNow) {
       if (known != 0 && std::llabs(static_cast<long long>(lastSync - known)) > 120) {
         LOG_INF("TIME", "Clock corrected by %lld s", static_cast<long long>(lastSync - known));
       }
+    } else if (known != 0) {
+      // NTP is blocked here but the RTC already holds valid time: keep it and try
+      // NTP again on the next resync rather than an extra HTTPS round trip.
+      LOG_INF("TIME", "NTP unavailable; keeping RTC time");
     } else if (syncFromHttpDate()) {
       lastSync = systemTime();
     } else {

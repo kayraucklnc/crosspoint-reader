@@ -130,6 +130,9 @@ bool HalClock::syncFromNTP() {
   }
 
   LOG_ERR("CLK", "NTP sync timed out");
+  // Stop the SNTP client so it doesn't keep retrying (and resolving servers)
+  // underneath the HTTPS requests that follow. esp_sntp_* is thread-safe.
+  esp_sntp_stop();
   setTimezone(savedTz);
   return false;
 }
