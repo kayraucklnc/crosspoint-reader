@@ -15,6 +15,7 @@ struct StripeCharge {
   int64_t amountRefunded = 0;
   int64_t net = 0;  // balance transactions only
   int64_t created = 0;
+  double exchangeRate = 0;  // balance transactions only: settlement units per presentment unit
 };
 
 /**

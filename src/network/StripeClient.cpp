@@ -70,13 +70,6 @@ time_t localMidnight(const time_t now, const int daysAgo, const int dayOfMonth =
   return mktime(&local);
 }
 
-bool isType(const StripeCharge& record, const char* const* types, const size_t count) {
-  for (size_t i = 0; i < count; i++) {
-    if (record.type == types[i]) return true;
-  }
-  return false;
-}
-
 // Value of one record in cents, or false if it doesn't count toward income.
 bool recordValue(const StripeClient::Amount amount, const Source source, const StripeCharge& record, int64_t& cents) {
   if (record.currency != "usd") return false;
@@ -85,15 +78,13 @@ bool recordValue(const StripeClient::Amount amount, const Source source, const S
     cents = record.amount - record.amountRefunded;
     return true;
   }
-  if (amount == StripeClient::Amount::GROSS) {
-    // Charges at their USD settlement amount, less refunds (dated when refunded).
-    static constexpr const char* GROSS_TYPES[] = {"charge", "payment", "refund", "payment_refund"};
-    if (!isType(record, GROSS_TYPES, sizeof(GROSS_TYPES) / sizeof(GROSS_TYPES[0]))) return false;
-    cents = record.amount;
-    return true;
+  // Net: every balance movement except money leaving to the bank or other
+  // accounts. Stripe may bill fees as separate "stripe_fee" rows (fee 0 on the
+  // charge), so fee and adjustment rows must count.
+  static constexpr const char* OUTFLOW_PREFIXES[] = {"payout", "transfer", "topup", "reserve"};
+  for (const char* prefix : OUTFLOW_PREFIXES) {
+    if (record.type.rfind(prefix, 0) == 0) return false;
   }
-  static constexpr const char* NET_TYPES[] = {"charge", "payment", "refund", "payment_refund", "adjustment"};
-  if (!isType(record, NET_TYPES, sizeof(NET_TYPES) / sizeof(NET_TYPES[0]))) return false;
   cents = record.net;
   return true;
 }
@@ -208,11 +199,38 @@ StripeClient::Result fetchFrom(const StripeClient::Amount amount, const Source s
 
   int64_t fetchedByDay[IncomeCache::MAX_DAYS + 1] = {};
   uint16_t nonUsdByDay[IncomeCache::MAX_DAYS + 1] = {};
+  // A second balance currency (e.g. GBP), converted to USD once a charge row gives its rate.
+  int64_t foreignByDay[IncomeCache::MAX_DAYS + 1] = {};
+  int64_t foreignWindow[IncomeSummary::DAY_COUNT] = {};
+  std::string foreignCurrency;
+  double foreignPerUsd = 0;
   int futureRecords = 0;
   auto onRecord = [&](const StripeCharge& record) {
     // A record "from the future" means our clock is behind; never let it land in today.
     if (record.created > now + FUTURE_SLACK) {
       futureRecords++;
+      return;
+    }
+    if (source == Source::BALANCE && record.currency != "usd") {
+      if (foreignCurrency.empty()) foreignCurrency = record.currency;
+      if (record.currency != foreignCurrency) return;
+      if (foreignPerUsd == 0 && record.exchangeRate > 0) foreignPerUsd = record.exchangeRate;
+      StripeCharge asUsd = record;
+      asUsd.currency = "usd";
+      int64_t foreignCents = 0;
+      if (!recordValue(amount, source, asUsd, foreignCents)) return;
+      for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) {
+        if (record.created >= fresh.dayStart[i]) {
+          foreignWindow[i] += foreignCents;
+          break;
+        }
+      }
+      if (record.created >= fresh.monthStart) {
+        const time_t created = static_cast<time_t>(record.created);
+        struct tm day;
+        calendarOf(created, day);
+        foreignByDay[day.tm_mday] += foreignCents;
+      }
       return;
     }
     int64_t cents = 0;
@@ -240,6 +258,19 @@ StripeClient::Result fetchFrom(const StripeClient::Amount amount, const Source s
   const StripeClient::Result result = fetchRecords(source, "Bearer " + key, since, onRecord);
   if (result != StripeClient::Result::OK) return result;
   if (futureRecords > 0) LOG_ERR("STRIPE", "Ignored %d records dated after now; clock is behind", futureRecords);
+  if (!foreignCurrency.empty()) {
+    if (foreignPerUsd > 0) {
+      const auto toUsd = [foreignPerUsd](const int64_t foreignCents) {
+        return static_cast<int64_t>(static_cast<double>(foreignCents) / foreignPerUsd + (foreignCents < 0 ? -0.5 : 0.5));
+      };
+      for (int day = 1; day <= IncomeCache::MAX_DAYS; day++) fetchedByDay[day] += toUsd(foreignByDay[day]);
+      for (int i = 0; i < IncomeSummary::DAY_COUNT; i++) fresh.cents[i] += toUsd(foreignWindow[i]);
+      LOG_INF("STRIPE", "Converted %s balance at %.4f per USD", foreignCurrency.c_str(), foreignPerUsd);
+    } else {
+      LOG_ERR("STRIPE", "No %s exchange rate in this fetch; %s movements left out", foreignCurrency.c_str(),
+              foreignCurrency.c_str());
+    }
+  }
 
   for (int day = std::max(1, firstUnknown); firstUnknown > 0 && day <= lastClosedDay; day++) {
     cache.setClosed(day, fetchedByDay[day], nonUsdByDay[day]);
@@ -280,6 +311,10 @@ StripeClient::Result StripeClient::fetchIncome(const Amount amount, IncomeSummar
     LOG_ERR("STRIPE", "Not enough heap for TLS: free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
     return Result::LOW_MEMORY;
   }
+
+  // Gross matches Stripe's "Gross volume": successful charges less refunds. Balance
+  // transactions miss charges that have not settled yet, so they undercount it.
+  if (amount == Amount::GROSS) return fetchFrom(amount, Source::CHARGES, key, now, 0, out);
 
   // A Gross key already known to lack Balance read skips the probe until it is due again.
   IncomeCache previous;

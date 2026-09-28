@@ -25,6 +25,8 @@ void StripeChargeScanner::onValue(const std::string& value) {
     current.amountRefunded = strtoll(value.c_str(), nullptr, 10);
   } else if (key == "created") {
     current.created = strtoll(value.c_str(), nullptr, 10);
+  } else if (key == "exchange_rate") {
+    current.exchangeRate = value == "null" ? 0 : strtod(value.c_str(), nullptr);
   }
 }
 

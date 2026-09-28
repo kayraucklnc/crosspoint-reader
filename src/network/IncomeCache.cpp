@@ -5,7 +5,7 @@
 #include <Logging.h>
 
 namespace {
-constexpr int CACHE_VERSION = 2;  // 2: Gross from balance transactions, non-USD counts
+constexpr int CACHE_VERSION = 3;  // 3: Gross from charges, Net includes fee rows
 }
 
 bool IncomeCache::load() {
