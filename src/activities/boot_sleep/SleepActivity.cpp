@@ -509,6 +509,14 @@ void showDimmedFrame(const GfxRenderer& renderer) {
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
+// A full-waveform refresh to black between the dim and the wallpaper. The
+// wallpaper's grayscale base refresh doesn't fully drive pixels the previous
+// page left behind, so without this the page ghosts through the wallpaper.
+void clearGhostsToBlack(const GfxRenderer& renderer) {
+  renderer.clearScreen(0x00);
+  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+}
+
 void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
   if (auto* fcm = renderer.getFontCacheManager()) {
     LOG_DBG("SLP", "Free heap before SD font cache release: %d bytes", ESP.getFreeHeap());
@@ -569,6 +577,7 @@ void SleepActivity::onEnter() {
     // Dim what the user sees: fold a night-mode inversion into the buffer first.
     if (frameWasInverted) renderer.invertScreen();
     showDimmedFrame(renderer);
+    clearGhostsToBlack(renderer);
   } else if (APP_STATE.lastSleepFromReader) {
     // Show popup with reader orientation only when going to sleep from reader
     ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
