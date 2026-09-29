@@ -509,12 +509,12 @@ void showDimmedFrame(const GfxRenderer& renderer) {
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
-// A full-waveform refresh to black between the dim and the wallpaper. The
-// wallpaper's grayscale base refresh doesn't fully drive pixels the previous
-// page left behind, so without this the page ghosts through the wallpaper.
+// A single-pass (HALF) refresh to solid black between the dim and the
+// wallpaper. It drives every pixel, unlike the fast dim refresh, so the page
+// doesn't ghost through the wallpaper, without the multi-flash FULL waveform.
 void clearGhostsToBlack(const GfxRenderer& renderer) {
   renderer.clearScreen(0x00);
-  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
 
 void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
