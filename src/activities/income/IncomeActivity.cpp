@@ -24,6 +24,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/IncomeCalendar.h"
+#include "network/NetworkTime.h"
 #include "network/WifiAutoConnect.h"
 
 namespace {
@@ -37,6 +38,12 @@ constexpr int FAST_FRAMES_PER_HALF = 12;
 constexpr int MAX_BACKFILL_MONTHS = 14;
 // A timer wake has a 45 s budget: it fills a few closed months per wake, the rest on later wakes.
 constexpr int BACKGROUND_BACKFILL_MONTHS = 3;
+// Network work per loop pass while someone watches: progress is drawn between steps.
+constexpr uint32_t FOREGROUND_STEP_MS = 20000;
+// A timer wake's share of its 45 s budget for starting requests; the rest covers
+// the last request (with its retry) and the snapshot.
+constexpr uint32_t BACKGROUND_WORK_MS = 30000;
+constexpr uint32_t MIN_STEP_MS = 3000;
 
 // Hero label for the bucket holding today.
 const char* presentLabel(const IncomeRange range) {
@@ -71,24 +78,12 @@ bool viewComplete(const IncomeView& view) {
   return true;
 }
 
-const char* resultMessage(const StripeClient::Result result) {
-  switch (result) {
-    case StripeClient::Result::NO_TIME:
-      return tr(STR_INCOME_ERR_TIME);
-    case StripeClient::Result::LOW_MEMORY:
-      return tr(STR_INCOME_ERR_MEMORY);
-    case StripeClient::Result::INVALID_KEY:
-      return tr(STR_INCOME_ERR_INVALID_KEY);
-    case StripeClient::Result::FORBIDDEN:
-      return tr(STR_INCOME_ERR_FORBIDDEN);
-    default:
-      return tr(STR_INCOME_ERR_STRIPE);
-  }
-}
+unsigned kilobytes(const uint32_t bytes) { return static_cast<unsigned>((bytes + 512) / 1024); }
 }  // namespace
 
 void IncomeActivity::onEnter() {
   Activity::onEnter();
+  workStartedAt = millis();
   // Every visit starts at the present period.
   offset = 0;
   // Show the last cached numbers immediately; the refresh redraws when it lands.
@@ -155,6 +150,12 @@ void IncomeActivity::startFetch(const bool includeCurrent) {
   backfillDone = 0;
   backfillTotal = 0;
   lastBackfillKey = 0;
+  lastBackfillKnown = -1;
+  currentSteps = 0;
+  pendingDays = 0;
+  fetchWallStart = network_time::current();
+  // A timer wake's budget counts from the wake (onEnter); a refresh someone asked for starts afresh.
+  if (background == BackgroundMode::Off) workStartedAt = millis();
   if (WiFi.status() == WL_CONNECTED) {
     state = State::LOADING;
   } else {
@@ -213,14 +214,44 @@ void IncomeActivity::runFetch() {
   }
 
   if (refreshCurrent) {
+    const uint32_t budget = stepBudget();
     IncomeSummary fresh;
-    const StripeClient::Result result = StripeClient::fetchIncome(amountMode(), fresh);
-    if (result != StripeClient::Result::OK) {
+    const StripeClient::Result result =
+        StripeClient::fetchIncome(amountMode(), fresh, budget > 0 ? budget : MIN_STEP_MS, currentSteps > 0);
+    currentSteps++;
+    const int previousPending = pendingDays;
+    pendingDays = StripeClient::pendingDays();
+    LOG_INF("INCOME", "Refresh step %d: result %d, %d request(s), %lu KB, %d day(s) missing", currentSteps,
+            static_cast<int>(result), StripeClient::lastRequestCount(),
+            static_cast<unsigned long>(kilobytes(StripeClient::lastBytes())), pendingDays);
+    {
+      RenderLock lock(*this);
+      // Pages fetched before a failure are on SD: show them.
+      hasSummary = StripeClient::loadCache(amountMode(), income);
+    }
+    // A dropped page after others were saved is worth another step; one that saved nothing is not.
+    const bool progressed = StripeClient::lastDaysSaved() > 0;
+    const bool retry = result == StripeClient::Result::HTTP_ERROR && progressed && pendingDays > 0;
+    if (result == StripeClient::Result::PARTIAL || retry) {
+      const bool stuck = currentSteps > 1 && pendingDays >= previousPending && !progressed;
+      if (!stuck && stepBudget() > 0) {
+        requestUpdate();  // next pass continues: "Fetching... (N days left)"
+        return;
+      }
+      if (retry) {
+        finishFetch(result);
+        return;
+      }
+      // The rest of the month fills on the next refresh; the present period is up to date.
+      if (!hasSummary) {
+        finishFetch(StripeClient::Result::HTTP_ERROR);
+        return;
+      }
+    } else if (result != StripeClient::Result::OK) {
       finishFetch(result);
       return;
     }
     RenderLock lock(*this);
-    hasSummary = StripeClient::loadCache(amountMode(), income);
     if (!hasSummary) {
       // The SD write failed: show the fresh window; this month's closed days stay unknown.
       income = IncomeCache{};
@@ -253,10 +284,14 @@ void IncomeActivity::runBackfillStep() {
     finishFetch(StripeClient::Result::OK);
     return;
   }
-  if (key == lastBackfillKey || backfillDone >= MAX_BACKFILL_MONTHS) {
-    // Fetched but still missing (the SD write failed), or a runaway: stop rather than loop.
+  const uint32_t budget = stepBudget();
+  if (budget == 0) {
+    finishFetch(StripeClient::Result::OK);  // the timer wake's time is used up; a later wake continues
+    return;
+  }
+  if (backfillDone >= MAX_BACKFILL_MONTHS) {
     LOG_ERR("INCOME", "Backfill stopped at %06d after %d month(s)", key, backfillDone);
-    finishFetch(StripeClient::Result::HTTP_ERROR);
+    finishFetch(StripeClient::Result::OK);
     return;
   }
   backfillTotal = backfillDone + remaining;
@@ -268,15 +303,31 @@ void IncomeActivity::runBackfillStep() {
     finishFetch(StripeClient::Result::LOW_MEMORY);
     return;
   }
-  const StripeClient::Result result = StripeClient::fetchMonth(amountMode(), key / 100, key % 100, *month);
-  LOG_INF("INCOME", "Backfill %06d: %d request(s)", key, StripeClient::lastRequestCount());
-  if (result != StripeClient::Result::OK) {
+  const StripeClient::Result result = StripeClient::fetchMonth(amountMode(), key / 100, key % 100, *month, budget);
+  int known = 0;
+  for (int day = 1; day <= IncomeMonth::MAX_DAYS; day++) known += month->isKnown(day) ? 1 : 0;
+  LOG_INF("INCOME", "Backfill %06d: result %d, %d request(s), %lu KB, %d day(s) on SD", key, static_cast<int>(result),
+          StripeClient::lastRequestCount(), static_cast<unsigned long>(kilobytes(StripeClient::lastBytes())), known);
+  if (result == StripeClient::Result::NO_TIME) {
+    finishFetch(StripeClient::Result::OK);  // the month ended moments ago; it fills on a later refresh
+    return;
+  }
+  // A dropped page after others were saved is worth another step; one that saved nothing is not.
+  const bool retry = result == StripeClient::Result::HTTP_ERROR && StripeClient::lastDaysSaved() > 0;
+  if (result != StripeClient::Result::OK && result != StripeClient::Result::PARTIAL && !retry) {
     // Unattended, the present period has already refreshed; a later wake retries the month.
     finishFetch(background != BackgroundMode::Off ? StripeClient::Result::OK : result);
     return;
   }
+  if (key == lastBackfillKey && known <= lastBackfillKnown) {
+    // No progress on the same month (the SD write failed, or a runaway): stop rather than loop.
+    LOG_ERR("INCOME", "Backfill stopped at %06d after %d month(s)", key, backfillDone);
+    finishFetch(background != BackgroundMode::Off ? StripeClient::Result::OK : StripeClient::Result::HTTP_ERROR);
+    return;
+  }
+  if (result == StripeClient::Result::OK) backfillDone++;
   lastBackfillKey = key;
-  backfillDone++;
+  lastBackfillKnown = known;
   requestUpdate();
 }
 
@@ -288,10 +339,65 @@ void IncomeActivity::finishFetch(const StripeClient::Result result) {
     state = State::NO_KEY;
   } else {
     state = State::ERROR;
-    errorMessage = resultMessage(result);
+    describeFailure(result);
   }
-  finishBackground(result == StripeClient::Result::OK);
+  // Unattended, success means the present period was refreshed during this wake;
+  // closed days still missing after a later failure fill on the next wake.
+  const bool refreshed = fetchWallStart > 0 && hasSummary && income.lastSummary.fetchedAt >= fetchWallStart;
+  finishBackground(result == StripeClient::Result::OK || (refreshCurrent && refreshed));
   requestUpdate();
+}
+
+uint32_t IncomeActivity::stepBudget() const {
+  if (background == BackgroundMode::Off) return FOREGROUND_STEP_MS;
+  const unsigned long used = millis() - workStartedAt;
+  return used + MIN_STEP_MS < BACKGROUND_WORK_MS ? static_cast<uint32_t>(BACKGROUND_WORK_MS - used) : 0;
+}
+
+void IncomeActivity::describeFailure(const StripeClient::Result result) {
+  const stripe_http::Report& failure = StripeClient::lastFailure();
+  errorMessage = errorText;
+  switch (result) {
+    case StripeClient::Result::NO_TIME:
+      errorMessage = tr(STR_INCOME_ERR_TIME);
+      return;
+    case StripeClient::Result::INVALID_KEY:
+      errorMessage = tr(STR_INCOME_ERR_INVALID_KEY);
+      return;
+    case StripeClient::Result::FORBIDDEN:
+      errorMessage = tr(STR_INCOME_ERR_FORBIDDEN);
+      return;
+    default:
+      break;
+  }
+  switch (failure.failure) {
+    case stripe_http::Failure::LOW_MEMORY:
+      snprintf(errorText, sizeof(errorText), tr(STR_INCOME_ERR_TLS_MEMORY), kilobytes(failure.freeHeap),
+               kilobytes(failure.maxBlock));
+      return;
+    case stripe_http::Failure::TIMEOUT:
+      snprintf(errorText, sizeof(errorText), tr(STR_INCOME_ERR_TIMEOUT), kilobytes(failure.bytes));
+      return;
+    case stripe_http::Failure::DROPPED:
+      snprintf(errorText, sizeof(errorText), tr(STR_INCOME_ERR_DROPPED), kilobytes(failure.bytes));
+      return;
+    case stripe_http::Failure::CONNECT:
+      errorMessage = tr(STR_INCOME_ERR_CONNECT);
+      return;
+    case stripe_http::Failure::DNS:
+      errorMessage = tr(STR_INCOME_ERR_DNS);
+      return;
+    case stripe_http::Failure::HTTP_STATUS:
+      snprintf(errorText, sizeof(errorText), tr(STR_INCOME_ERR_HTTP), failure.status);
+      return;
+    case stripe_http::Failure::BAD_REPLY:
+      errorMessage = tr(STR_INCOME_ERR_BAD_REPLY);
+      return;
+    case stripe_http::Failure::NONE:
+    default:
+      errorMessage = result == StripeClient::Result::LOW_MEMORY ? tr(STR_INCOME_ERR_MEMORY) : tr(STR_INCOME_ERR_STRIPE);
+      return;
+  }
 }
 
 void IncomeActivity::loop() {
@@ -594,8 +700,13 @@ int IncomeActivity::renderStatus(const int x, const int y, const int width, cons
 
   if (state == State::CONNECTING || state == State::LOADING || state == State::PICKING) {
     const bool fetching = state == State::LOADING;
-    return income_gfx::drawStepStatus(renderer, x, y, width, alignRight, fetching ? 1 : 0,
-                                      fetching ? tr(STR_INCOME_FETCHING) : tr(STR_INCOME_CONNECTING));
+    char progress[48];
+    if (fetching && currentSteps > 0 && pendingDays > 0) {
+      snprintf(progress, sizeof(progress), tr(STR_INCOME_FETCHING_DAYS), pendingDays);
+    } else {
+      snprintf(progress, sizeof(progress), "%s", fetching ? tr(STR_INCOME_FETCHING) : tr(STR_INCOME_CONNECTING));
+    }
+    return income_gfx::drawStepStatus(renderer, x, y, width, alignRight, fetching ? 1 : 0, progress);
   }
   if (state == State::BACKFILL) {
     char progress[48];
@@ -611,7 +722,16 @@ int IncomeActivity::renderStatus(const int x, const int y, const int width, cons
     char lines[2][96];
     const int count = income_gfx::wrapText(renderer, SMALL_FONT_ID, errorMessage, width, lines, 2);
     for (int i = 0; i < count; i++) drawLine(lines[i], y + i * lineHeight);
-    return y + count * lineHeight;
+    if (!hasSummary) return y + count * lineHeight;
+    // The numbers above are the last good ones: say how old they are.
+    char clock[8];
+    char stale[48];
+    struct tm local;
+    localtime_r(&summary.fetchedAt, &local);
+    strftime(clock, sizeof(clock), "%H:%M", &local);
+    snprintf(stale, sizeof(stale), tr(STR_INCOME_STALE), clock);
+    drawLine(stale, y + count * lineHeight);
+    return y + (count + 1) * lineHeight;
   }
 
   if (!hasSummary) return y;

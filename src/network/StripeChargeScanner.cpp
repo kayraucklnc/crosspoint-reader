@@ -7,6 +7,10 @@ void StripeChargeScanner::onValue(const std::string& value) {
     hasMoreFlag = value == "true";
     return;
   }
+  if (depth == 1 && key == "next_page") {
+    nextPageToken = value == "null" ? "" : value;
+    return;
+  }
   if (!atChargeLevel()) return;
 
   if (key == "id") {
@@ -17,6 +21,8 @@ void StripeChargeScanner::onValue(const std::string& value) {
     current.status = value;
   } else if (key == "type") {
     current.type = value;
+  } else if (key == "payment_intent") {
+    current.paymentIntent = value == "null" ? "" : value;
   } else if (key == "net") {
     current.net = strtoll(value.c_str(), nullptr, 10);
   } else if (key == "amount") {
@@ -44,7 +50,7 @@ void StripeChargeScanner::feed(const uint8_t* data, const size_t len) {
     if (inString) {
       if (escape) {
         escape = false;
-        if (token.size() < MAX_TOKEN) token += c;
+        if (token.size() < tokenLimit()) token += c;
       } else if (c == '\\') {
         escape = true;
       } else if (c == '"') {
@@ -58,7 +64,7 @@ void StripeChargeScanner::feed(const uint8_t* data, const size_t len) {
           onValue(token);
         }
         token.clear();
-      } else if (token.size() < MAX_TOKEN) {
+      } else if (token.size() < tokenLimit()) {
         token += c;
       }
       continue;
@@ -90,6 +96,7 @@ void StripeChargeScanner::feed(const uint8_t* data, const size_t len) {
         }
         if (depth > 0) depth--;
         if (depth == 1 && c == ']') inDataArray = false;
+        if (depth == 0 && c == '}') rootClosed = true;
         break;
       case ',':
         finishScalar();
@@ -109,7 +116,7 @@ void StripeChargeScanner::feed(const uint8_t* data, const size_t len) {
           inScalar = true;
           token.clear();
         }
-        if (token.size() < MAX_TOKEN) token += c;
+        if (token.size() < tokenLimit()) token += c;
         break;
     }
   }

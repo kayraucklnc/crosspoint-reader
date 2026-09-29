@@ -30,6 +30,51 @@ class HttpDownloader {
   static constexpr uint32_t MIN_TLS_FREE_HEAP = 40000;
   static constexpr uint32_t MIN_TLS_MAX_ALLOC = 20000;
 
+  // What one request did. Failed and slow requests are also appended to
+  // /.crosspoint/netlog.txt (net_log).
+  struct RequestStats {
+    int status = 0;  // final HTTP status; -1 when no status line arrived
+    size_t bytes = 0;
+    size_t contentLength = 0;  // 0 when the response had none
+    uint32_t elapsedMs = 0;
+    uint32_t freeBefore = 0;
+    uint32_t blockBefore = 0;
+    uint32_t freeAfter = 0;
+    uint32_t blockAfter = 0;
+    bool complete = false;  // a 200 whose body arrived in full
+    bool stalled = false;   // ended by the socket timeout, not by the peer
+    bool dnsFailed = false;
+  };
+
+  struct RequestOptions {
+    const char* authorization = nullptr;  // sent verbatim as the Authorization header
+    uint32_t timeoutMs = 0;               // per socket operation; 0 = the 60 s default
+    const char* logTag = nullptr;         // short context for the netlog line
+    uint8_t attempt = 1;                  // shown in the netlog line when > 1
+    RequestStats* stats = nullptr;
+  };
+
+  /**
+   * Stream the response body of a GET to onData with the given options.
+   * Returns true for a 200 whose body arrived in full.
+   */
+  static bool fetch(const std::string& url, const DataCallback& onData, const RequestOptions& options);
+
+  /**
+   * While one exists, requests share one kept-alive connection (wolfSSL only),
+   * so a run of API pages pays for one TLS handshake instead of one per page.
+   * The connection and its TLS buffers are freed when the last one goes away.
+   */
+  class KeepAlive {
+   public:
+    KeepAlive();
+    ~KeepAlive();
+    KeepAlive(const KeepAlive&) = delete;
+    KeepAlive& operator=(const KeepAlive&) = delete;
+    // Closes the shared connection now (frees its TLS memory); the next request reconnects.
+    static void reset();
+  };
+
   /**
    * Fetch text content from a URL with optional credentials.
    */

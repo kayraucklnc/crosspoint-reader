@@ -16,6 +16,7 @@ struct IncomeMonth {
     nonUsd[day] = skipped;
     known |= 1u << day;
   }
+  void forget(const int day) { known &= ~(1u << day); }
 };
 
 // Closed months on SD, one 322-byte file per month and amount mode:

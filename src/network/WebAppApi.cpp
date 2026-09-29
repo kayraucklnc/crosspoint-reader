@@ -93,7 +93,9 @@ void handleIncomeKey(WebServer& server) {
     sendError(server, 500, "Could not write the key file");
     return;
   }
-  Storage.remove(IncomeCache::PATH);  // numbers from another account must not linger
+  // Numbers from another account must not linger.
+  Storage.remove(IncomeCache::PATH);
+  Storage.remove(IncomeCache::GROSS_PATH);
   LOG_INF("WEBAPP", "Stripe key replaced");
   JsonDocument doc;
   doc["hasKey"] = true;
@@ -104,6 +106,7 @@ void handleIncomeKey(WebServer& server) {
 void handleIncomeKeyDelete(WebServer& server) {
   Storage.remove(StripeClient::KEY_PATH);
   Storage.remove(IncomeCache::PATH);
+  Storage.remove(IncomeCache::GROSS_PATH);
   JsonDocument doc;
   doc["hasKey"] = false;
   sendJson(server, doc);
