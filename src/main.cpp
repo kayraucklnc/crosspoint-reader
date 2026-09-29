@@ -24,6 +24,12 @@
 
 #include <cstring>
 
+#ifndef SIMULATOR
+#include <esp_sleep.h>
+#include <esp_system.h>
+#include <esp_timer.h>
+#endif
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
@@ -36,6 +42,7 @@
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "autorefresh/AutoRefresh.h"
+#include "network/NetLog.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "platform/UsbSerialJtagHandoff.h"
@@ -310,10 +317,11 @@ void enterDeepSleep(bool fromTimeout = false, bool timerRun = false) {
 
   halTiltSensor.deepSleep();
   display.deepSleep();
+  auto_refresh::armPlannedWake();
+  if (keepSnapshot) auto_refresh::traceSleep(timerRun ? "after-refresh" : "snapshot");
   Storage.prepareForDeepSleep();
   LOG_DBG("MAIN", "Entering deep sleep");
 
-  auto_refresh::armPlannedWake();
 #ifdef SIMULATOR
   auto_refresh::simulateTimerWake();
 #endif
@@ -324,12 +332,49 @@ void enterDeepSleep(bool fromTimeout = false, bool timerRun = false) {
 // panel keeps its frame. Keeps an auto-refresh plan alive across the wake.
 static void returnToSleepFromBoot() {
   auto_refresh::armRemainingWake();
+  if (APP_STATE.autoRefreshArmed) auto_refresh::traceSleep("from-boot");
   Storage.prepareForDeepSleep();
 #ifdef SIMULATOR
   auto_refresh::simulateTimerWake();
 #endif
   powerManager.startDeepSleep(gpio);
 }
+
+// One netlog line per boot of a sleep-refresh chain: reset reason and wake cause.
+static void traceBoot(const bool timerWake, const bool byUser) {
+  char line[80];
+#ifdef SIMULATOR
+  const int reset = 0;
+  const int cause = 0;
+#else
+  const int reset = static_cast<int>(esp_reset_reason());
+  const int cause = static_cast<int>(esp_sleep_get_wakeup_cause());
+#endif
+  snprintf(line, sizeof(line), "BOOT reset=%d cause=%d timer=%d user=%d", reset, cause, timerWake ? 1 : 0,
+           byUser ? 1 : 0);
+  net_log::note(line);
+}
+
+#ifndef SIMULATOR
+// Last resort for an unattended wake stuck in a blocking call (Wi-Fi, TLS): the
+// main loop never gets back to its budget check, so sleep from the timer task.
+constexpr uint64_t AUTO_REFRESH_DEADLINE_US = (AUTO_REFRESH_BUDGET_MS + 30000ULL) * 1000ULL;
+static esp_timer_handle_t autoRefreshDeadline = nullptr;
+
+static void onAutoRefreshDeadline(void*) {
+  if (!autoRefreshRun) return;  // handed to the user or already settled
+  LOG_ERR("AUTO", "Timer refresh stuck past its deadline: forcing sleep");
+  WiFi.mode(WIFI_OFF);
+  auto_refresh::armFallbackWake();
+  powerManager.startDeepSleep(gpio);
+}
+
+static void armAutoRefreshDeadline() {
+  const esp_timer_create_args_t args = {.callback = onAutoRefreshDeadline, .name = "auto_deadline"};
+  if (autoRefreshDeadline == nullptr && esp_timer_create(&args, &autoRefreshDeadline) != ESP_OK) return;
+  esp_timer_start_once(autoRefreshDeadline, AUTO_REFRESH_DEADLINE_US);
+}
+#endif
 
 // Timer wake: open the dashboard that is asleep on the panel, headless.
 static void startAutoRefreshRun() {
@@ -342,6 +387,10 @@ static void startAutoRefreshRun() {
   }
   autoRefreshRun = true;
   autoRefreshStartMs = millis();
+#ifndef SIMULATOR
+  armAutoRefreshDeadline();
+#endif
+  net_log::note(autoRefreshRenderOnly ? "AUTO start (redraw only)" : "AUTO start");
   LOG_INF("AUTO", "Timer wake: refreshing %s%s",
           APP_STATE.lastSleepApp == CrossPointState::SLEEP_APP_INCOME ? "Income" : "Trains",
           autoRefreshRenderOnly ? " (battery low, redraw only)" : "");
@@ -358,6 +407,7 @@ static void autoRefreshStep() {
   if (pressedBefore || gpio.wasAnyPressed() || gpio.rawInputActive()) {
     LOG_INF("AUTO", "Button pressed during timer refresh: waking up");
     autoRefreshRun = false;
+    net_log::note("AUTO handed to user (button)");
     wakePowerReleasePending = true;  // clears itself on the first frame without power held
     allowSleepAt = millis() + 2000;
     activityManager.leaveBackgroundRefresh();
@@ -372,6 +422,13 @@ static void autoRefreshStep() {
   }
   if (!autoRefreshRenderOnly) auto_refresh::recordOutcome(state == BackgroundRefresh::Succeeded);
   LOG_INF("AUTO", "Timer refresh settled after %lu ms", elapsed);
+  char line[80];
+  snprintf(line, sizeof(line), "AUTO %s after %lus",
+           state == BackgroundRefresh::Succeeded ? "ok"
+           : state == BackgroundRefresh::Failed  ? "failed"
+                                                 : "timed out",
+           elapsed / 1000);
+  net_log::note(line);
   enterDeepSleep(false, true);
 }
 
@@ -497,6 +554,7 @@ void setup() {
   HalSystem::checkPanic();
 
   APP_STATE.loadFromFile();
+  if (timerWake || APP_STATE.autoRefreshArmed) traceBoot(timerWake, timerWakeByUser);
   const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton || timerWakeByUser;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
 
@@ -572,6 +630,9 @@ void setup() {
     const long early = auto_refresh::secondsEarly();
     if (!APP_STATE.autoRefreshArmed || APP_STATE.lastSleepApp == CrossPointState::SLEEP_APP_NONE || early > 0) {
       LOG_INF("AUTO", "Timer wake %s, back to sleep", early > 0 ? "early" : "without a plan");
+      char line[64];
+      snprintf(line, sizeof(line), "WAKE %s early=%lds", early > 0 ? "early" : "unplanned", early);
+      net_log::note(line);
       halTiltSensor.deepSleep();
       returnToSleepFromBoot();
       return;  // simulator only: its sleep returns when the window closes
