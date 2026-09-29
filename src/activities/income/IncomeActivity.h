@@ -41,6 +41,7 @@ class IncomeActivity final : public Activity {
   enum class State { CONNECTING, PICKING, LOADING, BACKFILL, READY, NO_KEY, ERROR };
   State state = State::CONNECTING;
   const char* errorMessage = "";
+  char errorText[112] = "";  // a formatted error (errorMessage points here)
   // This month's closed days plus the last five-day summary; the view's anchor is its fetch time.
   IncomeCache income;
   bool hasSummary = false;
@@ -67,6 +68,13 @@ class IncomeActivity final : public Activity {
   int backfillDone = 0;
   int backfillTotal = 0;
   int lastBackfillKey = 0;
+  int lastBackfillKnown = -1;  // days of lastBackfillKey on SD after its last step
+  // This month's refresh runs in steps; later steps only fill missing days.
+  int currentSteps = 0;
+  int pendingDays = 0;
+  // millis() when this refresh (or the timer wake) started.
+  unsigned long workStartedAt = 0;
+  time_t fetchWallStart = 0;
   OptionPopup rangePopup;
   // Built under the render lock (render() or the loop holding a RenderLock); it reads SD.
   IncomeView view;
@@ -78,6 +86,9 @@ class IncomeActivity final : public Activity {
   void runFetch();
   void runBackfillStep();
   void finishFetch(StripeClient::Result result);
+  // Time the next network step may take; 0 when a timer wake has used its share.
+  uint32_t stepBudget() const;
+  void describeFailure(StripeClient::Result result);
   void runConnect();
   void onWifiSelectionComplete(bool connected);
   void stopWifi();

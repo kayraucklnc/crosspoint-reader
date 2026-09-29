@@ -8,13 +8,13 @@ namespace {
 constexpr int CACHE_VERSION = 3;  // 3: Gross from charges, Net includes fee rows
 }
 
-bool IncomeCache::load() {
+bool IncomeCache::load(const char* path) {
   *this = IncomeCache{};
-  if (!Storage.exists(PATH)) return false;
-  const String raw = Storage.readFile(PATH);
+  if (!Storage.exists(path)) return false;
+  const String raw = Storage.readFile(path);
   JsonDocument doc;
   if (deserializeJson(doc, raw.c_str()) != DeserializationError::Ok || doc["v"] != CACHE_VERSION) {
-    LOG_ERR("INCOME", "Ignoring unreadable %s", PATH);
+    LOG_ERR("INCOME", "Ignoring unreadable %s", path);
     return false;
   }
   monthKey = doc["month"] | 0;
@@ -28,7 +28,7 @@ bool IncomeCache::load() {
   for (int day = 1; day <= MAX_DAYS && day <= static_cast<int>(closedNonUsdJson.size()); day++) {
     closedNonUsd[day] = closedNonUsdJson[day - 1] | static_cast<uint16_t>(0);
   }
-  balanceDeniedAt = doc["noBalanceAt"] | static_cast<int64_t>(0);
+  refundsCheckedAt = doc["refundsAt"] | static_cast<int64_t>(0);
 
   JsonObjectConst last = doc["last"];
   if (!last.isNull()) {
@@ -53,7 +53,7 @@ bool IncomeCache::load() {
   return monthKey != 0;
 }
 
-bool IncomeCache::save() const {
+bool IncomeCache::save(const char* path) const {
   JsonDocument doc;
   doc["v"] = CACHE_VERSION;
   doc["month"] = monthKey;
@@ -63,7 +63,7 @@ bool IncomeCache::save() const {
   for (int day = 1; day <= MAX_DAYS; day++) closed.add(closedCents[day]);
   JsonArray closedNonUsdJson = doc["closedNonUsd"].to<JsonArray>();
   for (int day = 1; day <= MAX_DAYS; day++) closedNonUsdJson.add(closedNonUsd[day]);
-  if (balanceDeniedAt > 0) doc["noBalanceAt"] = static_cast<int64_t>(balanceDeniedAt);
+  if (refundsCheckedAt > 0) doc["refundsAt"] = static_cast<int64_t>(refundsCheckedAt);
 
   if (hasSummary) {
     JsonObject last = doc["last"].to<JsonObject>();
@@ -83,8 +83,8 @@ bool IncomeCache::save() const {
 
   String out;
   serializeJson(doc, out);
-  if (!Storage.writeFile(PATH, out)) {
-    LOG_ERR("INCOME", "Failed to write %s", PATH);
+  if (!Storage.writeFile(path, out)) {
+    LOG_ERR("INCOME", "Failed to write %s", path);
     return false;
   }
   return true;

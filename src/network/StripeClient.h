@@ -4,6 +4,8 @@
 #include <ctime>
 #include <string>
 
+#include "StripeHttp.h"
+
 struct IncomeCache;
 struct IncomeMonth;
 
@@ -23,11 +25,12 @@ struct IncomeSummary {
 
 class StripeClient {
  public:
-  enum class Result { OK, NO_KEY, NO_TIME, LOW_MEMORY, HTTP_ERROR, INVALID_KEY, FORBIDDEN };
-  // GROSS: charges minus refunds before fees; NET: balance-transaction net (after fees and refunds).
-  // Both read balance transactions, which Stripe records in the account's USD
-  // settlement currency, so charges in any currency count. A GROSS key without
-  // Balance read falls back to the charges list, where only USD charges count.
+  // PARTIAL: the time budget ran out; what was fetched is saved, call again to continue.
+  enum class Result { OK, PARTIAL, NO_KEY, NO_TIME, LOW_MEMORY, HTTP_ERROR, INVALID_KEY, FORBIDDEN };
+  // GROSS: successful USD charges less refunds, by the charge's day (Stripe's
+  // Gross volume); other currencies are counted as nonUsd. NET: balance-
+  // transaction net (after fees and refunds), a second balance currency
+  // converted at its exchange rate.
   enum class Amount : uint8_t { GROSS = 0, NET = 1 };
 
   static constexpr const char* KEY_PATH = "/.crosspoint/stripe.json";
@@ -42,14 +45,27 @@ class StripeClient {
   // Mode byte closed months of this amount are cached under (income_history).
   static uint8_t monthMode(Amount amount);
 
-  // Blocking; requires WiFi. Re-fetches only the five-day window (plus any
-  // closed days of this month missing from the SD cache) and updates the cache.
-  static Result fetchIncome(Amount amount, IncomeSummary& out);
+  // Blocking; requires WiFi. Gross fetches only the days not yet final on SD:
+  // the five-day window first, then this month's missing days, newest first,
+  // saving after every page; it starts no new page after budgetMs and then
+  // returns PARTIAL. backfillOnly skips the window (it was just refreshed).
+  // Net re-fetches the window plus any missing closed days of this month.
+  static Result fetchIncome(Amount amount, IncomeSummary& out, uint32_t budgetMs, bool backfillOnly = false);
 
-  // Blocking; requires WiFi. Fetches one month that has ended, day by day, and
-  // stores it on SD (income_history) so it is never fetched again.
-  static Result fetchMonth(Amount amount, int year, int month, IncomeMonth& out);
+  // Blocking; requires WiFi. Fetches the missing days of one month that has
+  // ended and stores them on SD (income_history), so each is fetched once.
+  // Gross saves after every page and may return PARTIAL like fetchIncome.
+  static Result fetchMonth(Amount amount, int year, int month, IncomeMonth& out, uint32_t budgetMs);
 
-  // Requests made by the last fetchIncome() or fetchMonth() call.
+  // Days of this month still missing after the last fetchIncome().
+  static int pendingDays();
+  // Days the last Gross fetchIncome() or fetchMonth() stored for good, even when it then failed.
+  static int lastDaysSaved();
+
+  // Requests (with retries) and body bytes of the last fetchIncome() or fetchMonth() call.
   static int lastRequestCount();
+  static uint32_t lastBytes();
+
+  // Why the last failed call failed.
+  static const stripe_http::Report& lastFailure();
 };
