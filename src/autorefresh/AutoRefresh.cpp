@@ -12,6 +12,7 @@
 #include "AutoRefreshSchedule.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "network/NetLog.h"
 #include "network/NetworkTime.h"
 
 #ifdef SIMULATOR
@@ -29,6 +30,7 @@ namespace auto_refresh {
 namespace {
 
 long plannedSeconds = 0;  // timer to arm at sleep entry; 0 = none
+long armedSeconds = 0;    // timer armed for the coming sleep; 0 = none
 
 #ifdef SIMULATOR
 long simArmedSeconds = 0;
@@ -36,6 +38,7 @@ long simArmedSeconds = 0;
 
 void armTimer(const long seconds) {
   if (seconds <= 0) return;
+  armedSeconds = seconds;
   LOG_INF("AUTO", "Timer wake armed in %ld s", seconds);
 #ifdef SIMULATOR
   simArmedSeconds = seconds;
@@ -155,6 +158,25 @@ void armRemainingWake() {
   } else {
     armTimer(plannedIntervalSeconds());
   }
+}
+
+void traceSleep(const char* why) {
+  char wake[8] = "-";
+  if (APP_STATE.autoRefreshWakeAt != 0) {
+    const time_t at = static_cast<time_t>(APP_STATE.autoRefreshWakeAt);
+    struct tm local;
+    localtime_r(&at, &local);
+    snprintf(wake, sizeof(wake), "%02d:%02d", local.tm_hour, local.tm_min);
+  }
+  char line[120];
+  snprintf(line, sizeof(line), "SLEEP %s app=%u timer=%lds wake=%s fails=%u batt=%d%% usb=%d", why,
+           APP_STATE.lastSleepApp, armedSeconds, wake, APP_STATE.autoRefreshFailures, batteryPercent(),
+           gpio.isUsbConnected() ? 1 : 0);
+  net_log::note(line);
+}
+
+void armFallbackWake() {
+  if (APP_STATE.autoRefreshArmed) armTimer(plannedIntervalSeconds());
 }
 
 SnapshotNote snapshotNote() {

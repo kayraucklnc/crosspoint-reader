@@ -37,6 +37,15 @@ void armPlannedWake();
 // to sleep (ghost power wake, USB wake, early timer).
 void armRemainingWake();
 
+// One line in the netlog for a sleep entry: which snapshot, the armed timer and
+// the battery, so an unattended wake chain can be checked from the SD card.
+// Call after the wake is armed and before storage shuts down.
+void traceSleep(const char* why);
+
+// Arms a wake one interval out; for sleeping without a trustworthy plan (the
+// refresh deadline). Touches only memory, never I2C or storage.
+void armFallbackWake();
+
 // Battery charge used for the low-battery pause, and whether it applies now.
 int batteryPercent();
 bool batteryTooLow();
