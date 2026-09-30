@@ -77,8 +77,8 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
 
 #if !SOC_PM_SUPPORT_EXT1_WAKEUP
   if (gpio.isXteinkDevice()) {
-    // GPIO13 gates the battery MOSFET on both Xteink C3 boards; driving it low
-    // is the battery power-off (the SDK wake source still handles USB power).
+    // GPIO13 gates the battery MOSFET on both Xteink C3 boards (on the X3 it also
+    // powers the SD card); driving it low is the battery power-off.
     // With a timer wake armed it is held HIGH instead: the chip then stays in
     // real deep sleep on battery, so the RTC timer can wake it.
     // Release any surviving pad hold first: hold_en survives deep sleep via
@@ -120,7 +120,27 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
   // button. Must run after display.deepSleep() so the panel controller gets its
   // deep-sleep command while its rail is still up (enterDeepSleep() in main.cpp
   // guarantees that ordering).
+#if !SOC_PM_SUPPORT_EXT1_WAKEUP
+  if (keepBatteryOn && gpio.isXteinkDevice()) {
+    // The X3 profile lists GPIO13 as its SD power enable, so the rail shutdown
+    // would drive it LOW again: on the X3 that is also the battery power-off (a
+    // sleep with it LOW comes back as a POWERON cold boot) and the armed RTC
+    // timer dies with it. Its only other X3 rail is the panel RESET, held HIGH
+    // exactly as powerDownRailsForSleep() would (the panel rail is not gated).
+    const int8_t rst = BoardConfig::ACTIVE.display.rst;
+    if (rst >= 0) {
+      const auto g = static_cast<gpio_num_t>(rst);
+      gpio_hold_dis(g);
+      pinMode(rst, OUTPUT);
+      digitalWrite(rst, HIGH);
+      gpio_hold_en(g);
+    }
+  } else {
+    freeink::PowerManager::powerDownRailsForSleep();
+  }
+#else
   freeink::PowerManager::powerDownRailsForSleep();
+#endif
 
 #if FREEINK_DEVICE_PAPERMONO
   // Its power button is behind the M5PM1 PMIC rather than an ESP GPIO, so
