@@ -554,7 +554,6 @@ void setup() {
   HalSystem::checkPanic();
 
   APP_STATE.loadFromFile();
-  if (timerWake || APP_STATE.autoRefreshArmed) traceBoot(timerWake, timerWakeByUser);
   const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton || timerWakeByUser;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
 
@@ -574,6 +573,8 @@ void setup() {
   // Push the saved timezone's POSIX rule into the clock (migrating the legacy
   // UTC-offset setting on first boot after the update).
   timezones::applyToClock();
+  // After the timezone is applied, so the line carries local time like the rest.
+  if (timerWake || APP_STATE.autoRefreshArmed) traceBoot(timerWake, timerWakeByUser);
   ordered_dither::mode = SETTINGS.imageDithering;
   RECENT_BOOKS.loadFromFile();
   LIBRARY_META.loadFromFile();
