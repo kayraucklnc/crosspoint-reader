@@ -206,7 +206,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum WALLPAPER_MODE { WALLPAPER_RANDOM = 0, WALLPAPER_CYCLE = 1, WALLPAPER_FIXED = 2 };
   // Dim: the outgoing page is shown under a 50% dot screen before the sleep image.
   // Off: the "Entering Sleep" popup instead.
-  enum SLEEP_TRANSITION { SLEEP_TRANSITION_DIM = 0, SLEEP_TRANSITION_OFF = 1 };
+  enum SLEEP_TRANSITION { SLEEP_TRANSITION_INSTANT = 0, SLEEP_TRANSITION_POPUP = 1 };
   enum HIDE_BATTERY_PERCENTAGE { HIDE_NEVER = 0, HIDE_READER = 1, HIDE_ALWAYS = 2, HIDE_BATTERY_PERCENTAGE_COUNT };
 
   // Page turn button long press behavior
@@ -305,7 +305,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Which /sleep wallpaper to show: WALLPAPER_MODE
   uint8_t wallpaperMode = WALLPAPER_RANDOM;
   // How the page leaves when the device goes to sleep: SLEEP_TRANSITION
-  uint8_t sleepTransition = SLEEP_TRANSITION_DIM;
+  uint8_t sleepTransition = SLEEP_TRANSITION_INSTANT;
   // Image quantization for covers and wallpapers: 0 = ordered (Bayer), 1 = error diffusion
   uint8_t imageDithering = 0;
   // One intermediate frame when flipping books on the home screen

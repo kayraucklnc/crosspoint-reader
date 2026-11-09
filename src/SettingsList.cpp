@@ -43,7 +43,7 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
                          StrId::STR_CAT_DISPLAY));
   emit(SettingInfo::Enum(StrId::STR_SLEEP_TRANSITION, &CrossPointSettings::sleepTransition,
-                         {StrId::STR_SLEEP_TRANSITION_DIM, StrId::STR_STATE_OFF}, "sleepTransition",
+                         {StrId::STR_SLEEP_TRANSITION_INSTANT, StrId::STR_SLEEP_TRANSITION_POPUP}, "sleepTransition",
                          StrId::STR_CAT_DISPLAY));
   emit(SettingInfo::Toggle(StrId::STR_KEEP_APP_ON_SLEEP, &CrossPointSettings::keepAppOnSleep, "keepAppOnSleep",
                            StrId::STR_CAT_DISPLAY));

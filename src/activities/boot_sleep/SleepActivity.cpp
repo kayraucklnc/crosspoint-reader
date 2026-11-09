@@ -675,30 +675,6 @@ bool drawSleepPopupPreservingFrame(GfxRenderer& renderer) {
   return true;
 }
 
-// Puts a 50% checkerboard of black dots over the displayed page (1 = white in
-// the framebuffer) and shows it with a single fast refresh. A checkerboard is
-// rotation-invariant, so the physical buffer is masked directly in any orientation.
-void showDimmedFrame(const GfxRenderer& renderer) {
-  uint8_t* frameBuffer = renderer.getFrameBuffer();
-  if (frameBuffer == nullptr) return;
-  const size_t rowBytes = renderer.getDisplayWidthBytes();
-  const size_t rows = renderer.getBufferSize() / rowBytes;
-  for (size_t row = 0; row < rows; row++) {
-    const uint8_t keep = (row & 1) ? 0x55 : 0xAA;
-    uint8_t* line = frameBuffer + row * rowBytes;
-    for (size_t i = 0; i < rowBytes; i++) line[i] &= keep;
-  }
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-}
-
-// A single-pass (HALF) refresh to solid black between the dim and the
-// wallpaper. It drives every pixel, unlike the fast dim refresh, so the page
-// doesn't ghost through the wallpaper, without the multi-flash FULL waveform.
-void clearGhostsToBlack(const GfxRenderer& renderer) {
-  renderer.clearScreen(0x00);
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-}
-
 void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
   if (auto* fcm = renderer.getFontCacheManager()) {
     LOG_DBG("SLP", "Free heap before SD font cache release: %d bytes", ESP.getFreeHeap());
@@ -744,7 +720,7 @@ void SleepActivity::onEnter() {
     // polarity after the display driver returns to normal.
     if (frameWasInverted) renderer.invertScreen();
     // The overlay is drawn over the page itself, so there is nothing to dim.
-    if (SETTINGS.sleepTransition == CrossPointSettings::SLEEP_TRANSITION_OFF) {
+    if (SETTINGS.sleepTransition == CrossPointSettings::SLEEP_TRANSITION_POPUP) {
       if (APP_STATE.lastSleepFromReader) {
         ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
       }
@@ -760,18 +736,17 @@ void SleepActivity::onEnter() {
     return renderTransparentCustomSleepScreen();
   }
 
-  if (SETTINGS.sleepTransition == CrossPointSettings::SLEEP_TRANSITION_DIM) {
-    // Dim what the user sees: fold a night-mode inversion into the buffer first.
-    if (frameWasInverted) renderer.invertScreen();
-    showDimmedFrame(renderer);
-    clearGhostsToBlack(renderer);
-  } else if (APP_STATE.lastSleepFromReader) {
-    // Show popup with reader orientation only when going to sleep from reader
-    ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-    GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
-    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-  } else {
-    GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
+  // Instant (the default) draws nothing first, so the sleep screen lands in its
+  // own single refresh; Popup shows "Entering sleep" over the page before it.
+  if (SETTINGS.sleepTransition == CrossPointSettings::SLEEP_TRANSITION_POPUP) {
+    if (APP_STATE.lastSleepFromReader) {
+      // Show popup with reader orientation only when going to sleep from reader
+      ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+      GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
+      renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+    } else {
+      GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
+    }
   }
 
   switch (SETTINGS.sleepScreen) {
