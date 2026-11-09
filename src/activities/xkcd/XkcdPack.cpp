@@ -16,8 +16,8 @@ constexpr uint16_t VERSION = 1;
 constexpr size_t HEADER_SIZE = 36;
 constexpr size_t RECORD_SIZE = 32;
 // Pack images are sized to the panel, so a row is at most 792 px (99 bytes).
-constexpr uint16_t MAX_WIDTH = 1024;
-constexpr size_t MAX_STRIDE = MAX_WIDTH / 8;
+constexpr uint16_t XKCD_MAX_WIDTH = 1024;
+constexpr size_t MAX_STRIDE = XKCD_MAX_WIDTH / 8;
 constexpr size_t READ_CHUNK = 1024;
 
 uint16_t u16(const uint8_t* p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
@@ -44,7 +44,7 @@ bool readRecord(HalFile& file, const uint32_t index, XkcdPack::Entry& out) {
   out.textOffset = u32(raw + 16);
   out.dataOffset = u32(raw + 20);
   out.dataSize = u32(raw + 24);
-  return out.num > 0 && out.width > 0 && out.width <= MAX_WIDTH && out.height > 0;
+  return out.num > 0 && out.width > 0 && out.width <= XKCD_MAX_WIDTH && out.height > 0;
 }
 
 // Plots one row of 1-bit pixels (MSB first, 1 = ink); white bytes cost one test.

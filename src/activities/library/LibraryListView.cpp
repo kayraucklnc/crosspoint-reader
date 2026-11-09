@@ -125,7 +125,10 @@ void LibraryListActivity::buildHeader(UiScreen& screen) {
     header.trailingAction = ACTION_SEARCH;
   }
   const auto frameRect = screen.frame().screen();
-  fui::header(screen.frame(), fui::Rect{frameRect.x, layout.headerTop, frameRect.width, layout.headerHeight}, header);
+  // headerBand fits the band to the board's bezel and rounded corners.
+  const fui::Rect band = BaseTheme::headerBand(
+      renderer, fui::Rect{frameRect.x, layout.headerTop, frameRect.width, layout.headerHeight}, header);
+  fui::header(screen.frame(), band, header);
 }
 
 // The sort band in the tab-bar language (active tab: light pill with an

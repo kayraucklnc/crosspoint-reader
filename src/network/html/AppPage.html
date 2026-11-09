@@ -135,7 +135,9 @@ async function api(path, body) {
   return data;
 }
 const fail = e => toast(e.message || String(e), true);
-const seg = (id, opts, cur) => `<div class="seg" id="${id}">${opts.map((o, i) => `<button data-v="${i}" class="${i === cur ? 'on' : ''}">${esc(o)}</button>`).join('')}</div>`;
+const option = (value, selected, label) => `<option value="${value}" ${selected ? 'selected' : ''}>${label}</option>`;
+const segButton = (o, i, cur) => `<button data-v="${i}" class="${i === cur ? 'on' : ''}">${esc(o)}</button>`;
+const seg = (id, opts, cur) => `<div class="seg" id="${id}">${opts.map((o, i) => segButton(o, i, cur)).join('')}</div>`;
 function onSeg(id, fn) {
   $('#' + id).onclick = e => { const b = e.target.closest('button'); if (!b) return;
     [...b.parentNode.children].forEach(x => x.classList.toggle('on', x === b)); fn(+b.dataset.v); };
@@ -372,14 +374,15 @@ async function viewSettings(m) {
   const ctrl = s => {
     const id = 'c-' + s.key;
     if (s.type === 'toggle') return `<label class="switch"><input type="checkbox" id="${id}" ${s.value ? 'checked' : ''}><span></span></label>`;
-    if (s.type === 'enum') return `<select id="${id}">${s.options.map((o, i) => `<option value="${i}" ${i === s.value ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    if (s.type === 'enum') return `<select id="${id}">${s.options.map((o, i) => option(i, i === s.value, esc(o))).join('')}</select>`;
     if (s.type === 'value' && VALUE_LABELS[s.key]) {
-      const opts = []; for (let i = s.min; i <= s.max; i += s.step) opts.push(`<option value="${i}" ${i === s.value ? 'selected' : ''}>${VALUE_LABELS[s.key](i)}</option>`);
+      const opts = []; for (let i = s.min; i <= s.max; i += s.step) opts.push(option(i, i === s.value, VALUE_LABELS[s.key](i)));
       return `<select id="${id}">${opts.join('')}</select>`;
     }
     if (s.type === 'value') return `<input type="number" id="${id}" value="${s.value}" min="${s.min}" max="${s.max}" step="${s.step}" style="width:96px">`;
     return `<input id="${id}" type="${/password/i.test(s.name) ? 'password' : 'text'}" value="${esc(s.value)}">`;
   };
+  const settingRow = s => `<div class="row"><span class="name">${esc(s.name)}</span>${ctrl(s)}</div>`;
   const tzSetting = all.find(s => s.key === 'clockTimezone');
   if (tzSetting && tzSetting.value >= tzs.length && dev.timezone != null) tzSetting.value = dev.timezone;  // 255 = never chosen
   const render = q => {
@@ -388,8 +391,8 @@ async function viewSettings(m) {
       .forEach(s => (groups[s.category] = groups[s.category] || []).push(s));
     let html = '';
     if (tzSetting && tzs.length && (!q || 'timezone clock'.includes(q))) html += `<div class="card"><h2>Clock</h2><div class="row"><span class="name">Timezone</span>
-      <select id="c-clockTimezone">${tzs.map((t, i) => `<option value="${i}" ${i === tzSetting.value ? 'selected' : ''}>${esc(t.name)} (${esc(t.offset)})</option>`).join('')}</select></div></div>`;
-    for (const g in groups) html += `<div class="card"><h2>${esc(g)}</h2>${groups[g].map(s => `<div class="row"><span class="name">${esc(s.name)}</span>${ctrl(s)}</div>`).join('')}</div>`;
+      <select id="c-clockTimezone">${tzs.map((t, i) => option(i, i === tzSetting.value, esc(t.name) + ' (' + esc(t.offset) + ')')).join('')}</select></div></div>`;
+    for (const g in groups) html += `<div class="card"><h2>${esc(g)}</h2>${groups[g].map(settingRow).join('')}</div>`;
     html += `<div class="card"><h2>More</h2><div class="row"><span class="name">Fonts</span><a class="btn" href="/fonts">Manage fonts</a></div>
       <div class="row"><span class="name">OPDS catalogs</span><button id="opdsBtn">Edit</button></div><div id="opds"></div></div>`;
     $('#sets').className = ''; $('#sets').innerHTML = html || '<p class="muted">No matches.</p>';
@@ -411,8 +414,9 @@ async function viewSettings(m) {
   };
   async function opds() {
     const box = $('#opds'), list = await api('/api/opds').catch(fail) || [];
+    const field = (s, k) => `<div class="row"><span class="name">${k}</span><input data-k="${k}" value="${esc(s[k] || '')}"></div>`;
     const form = (s, i) => `<div class="card" style="margin:10px 0 0;background:var(--panel-2)" data-i="${i}">
-      ${['name', 'url', 'username'].map(k => `<div class="row"><span class="name">${k}</span><input data-k="${k}" value="${esc(s[k] || '')}"></div>`).join('')}
+      ${['name', 'url', 'username'].map(k => field(s, k)).join('')}
       <div class="row"><span class="name">password</span><input data-k="password" type="password" placeholder="${s.hasPassword ? '(unchanged)' : ''}"></div>
       <div style="display:flex;gap:8px;margin-top:8px"><button class="primary" data-a="save">Save</button>${i >= 0 ? '<button class="danger" data-a="del">Delete</button>' : ''}</div></div>`;
     box.innerHTML = list.map(form).join('') + form({}, -1);

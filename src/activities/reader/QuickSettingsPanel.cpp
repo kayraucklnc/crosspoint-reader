@@ -11,6 +11,7 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "ReaderFontSizes.h"
+#include "ReaderLineSpacing.h"
 #include "activities/income/IncomeGraphics.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -27,14 +28,12 @@ constexpr StrId ROW_LABELS[] = {StrId::STR_SIZE,       StrId::STR_FONT,      Str
                                 StrId::STR_QS_REFRESH};
 constexpr StrId LINK_LABELS[] = {StrId::STR_QS_CHAPTERS, StrId::STR_BOOKMARKS,     StrId::STR_LOOKUP,
                                  StrId::STR_QS_STATS,    StrId::STR_GO_TO_PERCENT, StrId::STR_QS_ALL_OPTIONS};
-constexpr StrId SPACING_LABELS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE};
 constexpr StrId ALIGN_LABELS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                   StrId::STR_BOOK_S_STYLE};
 constexpr StrId REFRESH_LABELS[] = {StrId::STR_PAGES_1,  StrId::STR_PAGES_5,  StrId::STR_PAGES_10, StrId::STR_PAGES_15,
                                     StrId::STR_PAGES_20, StrId::STR_PAGES_30, StrId::STR_STATE_OFF};
 static_assert(std::size(ROW_LABELS) == static_cast<size_t>(QuickSettingsPanel::Row::Count), "row labels");
 static_assert(std::size(LINK_LABELS) == static_cast<size_t>(QuickSettingsPanel::Link::Count), "link labels");
-static_assert(std::size(SPACING_LABELS) == CrossPointSettings::LINE_COMPRESSION_COUNT, "spacing labels");
 static_assert(std::size(ALIGN_LABELS) == CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT, "alignment labels");
 static_assert(std::size(REFRESH_LABELS) == CrossPointSettings::REFRESH_FREQUENCY_COUNT, "refresh labels");
 
@@ -218,12 +217,11 @@ void QuickSettingsPanel::rowValue(const Row row, char* buf, const int len) const
       if (SETTINGS.sdFontFamilyName[0] != '\0') {
         snprintf(buf, len, "%s", SETTINGS.sdFontFamilyName);
       } else {
-        snprintf(buf, len, "%s",
-                 SETTINGS.fontFamily == CrossPointSettings::NOTOSANS ? tr(STR_NOTO_SANS) : tr(STR_NOTO_SERIF));
+        snprintf(buf, len, "%s", tr(STR_NOTO_SANS));
       }
       return;
     case Row::LineSpacing:
-      snprintf(buf, len, "%s", I18N.get(SPACING_LABELS[SETTINGS.lineSpacing % std::size(SPACING_LABELS)]));
+      snprintf(buf, len, "%s", I18N.get(LINE_SPACING_IDS[SETTINGS.lineSpacing % CrossPointSettings::LINE_COMPRESSION_COUNT]));
       return;
     case Row::Margins:
       snprintf(buf, len, "%u px", static_cast<unsigned>(SETTINGS.screenMargin));

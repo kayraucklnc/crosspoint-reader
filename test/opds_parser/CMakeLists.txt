@@ -2,12 +2,12 @@ find_package(EXPAT REQUIRED)
 
 add_executable(OpdsParserTest
   OpdsParserTest.cpp
-  ${REPO_ROOT}/lib/OpdsParser/OpdsParser.cpp
+  ${REPO_ROOT}/lib/LegacyOpds/LegacyOpdsParser.cpp
 )
 
 target_include_directories(OpdsParserTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/stubs
-  ${REPO_ROOT}/lib/OpdsParser
+  ${REPO_ROOT}/lib/LegacyOpds
   ${REPO_ROOT}/lib/XmlParserUtils
 )
 

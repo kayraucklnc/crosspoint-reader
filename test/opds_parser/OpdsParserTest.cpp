@@ -3,7 +3,11 @@
 #include <cstring>
 #include <string>
 
-#include "OpdsParser.h"
+#include "LegacyOpdsParser.h"
+
+using legacy_opds::OpdsEntry;
+using legacy_opds::OpdsEntryType;
+using legacy_opds::OpdsParser;
 
 namespace {
 

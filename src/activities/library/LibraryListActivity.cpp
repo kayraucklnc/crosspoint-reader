@@ -242,7 +242,7 @@ void LibraryListActivity::applySearch(const std::string& text) {
       query.clear();
     } else {
       memset(bits.get(), 0, (total + 7u) / 8u);
-      const std::string needle = library::fold(query, /*stripArticle=*/true);
+      const std::string needle = library::fold(query);
       std::string author;
       for (uint16_t i = 0; i < total; i++) {
         library::ClixRecord record{};
@@ -431,7 +431,7 @@ void LibraryListActivity::promptDelete(const std::string& path, const std::strin
   // The dialog and the delete both want the card; reopen when we resume.
   index.close();
   auto confirmation =
-      makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE) + std::string("? "), title);
+      makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE_ITEM_CONFIRM), title);
   if (!confirmation) {
     LOG_ERR("LIB", "OOM: delete confirmation");
     if (!index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
@@ -444,8 +444,8 @@ void LibraryListActivity::promptDelete(const std::string& path, const std::strin
       if (!index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
     } else {
       LOG_DBG("LIB", "deleting %s", path.c_str());
-      clearBookCache(path);
-      if (!Storage.remove(path.c_str())) LOG_ERR("LIB", "cannot delete %s", path.c_str());
+      // removeBookFile also drops the book's cache and its clippings.
+      if (!removeBookFile(path)) LOG_ERR("LIB", "cannot delete %s", path.c_str());
       book_shelf::removeFromHome(path);
       LIBRARY_META.updateFlags(path, 0, 0xFF);
       loadFailed = !rebuildIndex() || !model.load(index);

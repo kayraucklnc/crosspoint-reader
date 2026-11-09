@@ -178,7 +178,7 @@ void GetBooksActivity::drawResults() const {
   const int x0 = SIDE;
   const int x1 = w - SIDE;
   for (int i = first; i < last; i++) {
-    const OpdsEntry& entry = results[i];
+    const legacy_opds::OpdsEntry& entry = results[i];
     const int y = LIST_TOP + (i - first) * ROW_HEIGHT;
     char size[16];
     getbooks::formatSize(entry.size, size, sizeof(size));

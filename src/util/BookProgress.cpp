@@ -5,7 +5,6 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
-#include <Txt.h>
 #include <Xtc.h>
 
 #include <algorithm>
@@ -70,35 +69,13 @@ bool loadXtcInfo(const std::string& path, BookReadInfo& out) {
   return true;
 }
 
-bool loadTxtInfo(const std::string& path, BookReadInfo& out) {
-  Txt txt(path, "/.crosspoint");
-  HalFile index;
-  // TXT index v3: magic, version, file size, four layout fields, alignment, page count.
-  uint8_t header[30];
-  if (!Storage.openFileForRead("PROG", txt.getCachePath() + "/index.bin", index) ||
-      index.read(header, sizeof(header)) != sizeof(header))
-    return false;
-  if (readLe32(header) != 0x54585449 || header[4] != 3) return false;
-  const uint32_t pages = readLe32(header + 26);
-  if (pages == 0 || pages > (index.size() - sizeof(header)) / 4) return false;
-  HalFile source;
-  if (!Storage.openFileForRead("PROG", path, source) || source.size() != readLe32(header + 5)) return false;
-  out.exactPages = pages;
-  uint8_t data[4]{};
-  HalFile file;
-  if (!Storage.openFileForRead("PROG", txt.getCachePath() + "/progress.bin", file) || file.read(data, 4) != 4)
-    return true;
-  const uint32_t page = data[0] | (data[1] << 8);
-  out.progress = std::min<int>(100, static_cast<int>((page + 1) * 100ULL / pages));
-  return true;
-}
 }  // namespace
 
 bool loadBookReadInfo(const std::string& path, BookReadInfo& out) {
   out = BookReadInfo{};
-  if (FsHelpers::hasEpubExtension(path)) return loadEpubInfo(path, out);
+  // TXT and Markdown open through the EPUB pipeline and share its cache layout.
+  if (FsHelpers::hasReflowableBookExtension(path)) return loadEpubInfo(path, out);
   if (FsHelpers::hasXtcExtension(path)) return loadXtcInfo(path, out);
-  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) return loadTxtInfo(path, out);
   return false;
 }
 

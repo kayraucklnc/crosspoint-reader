@@ -26,8 +26,8 @@ std::string searchUrl(const Source& source, const std::string& query) {
   return url;
 }
 
-bool isBookRow(const OpdsEntry& entry) {
-  if (entry.type == OpdsEntryType::BOOK) return true;
+bool isBookRow(const legacy_opds::OpdsEntry& entry) {
+  if (entry.type == legacy_opds::OpdsEntryType::BOOK) return true;
   const size_t at = entry.href.find("/ebooks/");
   if (at == std::string::npos) return false;
   const size_t digit = at + strlen("/ebooks/");

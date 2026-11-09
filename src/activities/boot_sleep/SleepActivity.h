@@ -17,6 +17,7 @@ class SleepActivity final : public Activity {
  private:
   void renderDefaultSleepScreen() const;
   void renderCustomSleepScreen() const;
+  bool renderCustomSleepBmp(const std::string& path) const;
   void renderCoverSleepScreen() const;
   void renderBitmapSleepScreen(const Bitmap& bitmap, bool preserveBackground = false) const;
   bool renderSleepOverlayFile(HalFile& file, const char* pathForLog) const;
@@ -28,4 +29,7 @@ class SleepActivity final : public Activity {
 
   bool fromTimeout = false;
   bool keepSnapshot = false;
+  // Cover + Transparent: the cover under the overlay, and the same cover while its gray planes are redrawn.
+  mutable const Bitmap* overlayCover = nullptr;
+  mutable const Bitmap* overlayGrayCover = nullptr;
 };

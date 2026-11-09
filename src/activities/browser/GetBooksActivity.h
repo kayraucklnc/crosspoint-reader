@@ -1,7 +1,7 @@
 #pragma once
 
 #include <I18n.h>
-#include <OpdsParser.h>
+#include <LegacyOpdsParser.h>
 
 #include <cstdint>
 #include <string>
@@ -58,12 +58,12 @@ class GetBooksActivity final : public Activity {
   std::string query;
   std::string listUrl;
   std::string nextUrl;
-  std::vector<OpdsEntry> results;
+  std::vector<legacy_opds::OpdsEntry> results;
   int focus = 0;
   std::vector<std::string> previousUrls;  // earlier pages of a paged feed
 
   // Details of results[focus], completed from its own feed when needed.
-  OpdsEntry detail;
+  legacy_opds::OpdsEntry detail;
   std::string detailUrl;  // absolute download URL
   bool detailOnCard = false;
   bool hasCover = false;  // COVER_BMP_PATH holds this book's cover
@@ -87,7 +87,7 @@ class GetBooksActivity final : public Activity {
   bool download();
   void showError(StrId text, Screen returnTo);
   void openSavedBook();
-  std::string destinationFor(const OpdsEntry& entry) const;
+  std::string destinationFor(const legacy_opds::OpdsEntry& entry) const;
   const char* originName() const;
 
   // --- input ----------------------------------------------------------------

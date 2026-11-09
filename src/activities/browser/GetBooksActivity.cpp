@@ -9,7 +9,7 @@
 #include <LibraryBuilder.h>
 #include <Logging.h>
 #include <Memory.h>
-#include <OpdsStream.h>
+#include <LegacyOpdsStream.h>
 #include <WiFi.h>
 
 #include <algorithm>
@@ -179,10 +179,10 @@ void GetBooksActivity::showError(const StrId text, const Screen returnTo) {
 bool GetBooksActivity::fetchList() {
   const std::string url = UrlUtils::buildUrl(listUrl, "");
   LOG_DBG("GETBOOKS", "List: %s", url.c_str());
-  OpdsParser parser;
+  legacy_opds::OpdsParser parser;
   parser.setSummaryLimit(LIST_SUMMARY_CHARS);
   {
-    OpdsParserStream stream{parser};
+    legacy_opds::OpdsParserStream stream{parser};
     if (!HttpDownloader::fetchUrl(url, stream)) {
       showError(StrId::STR_FETCH_FEED_FAILED, screen);
       return false;
@@ -193,7 +193,7 @@ bool GetBooksActivity::fetchList() {
     return false;
   }
 
-  std::vector<OpdsEntry> fresh;
+  std::vector<legacy_opds::OpdsEntry> fresh;
   fresh.reserve(std::min(parser.getEntries().size(), MAX_RESULTS));
   for (auto& entry : std::move(parser).getEntries()) {
     if (fresh.size() >= MAX_RESULTS) break;
@@ -218,30 +218,30 @@ bool GetBooksActivity::fetchList() {
 // (the image-free edition is typically a twentieth of the size).
 bool GetBooksActivity::fetchDetail() {
   if (focus < 0 || focus >= static_cast<int>(results.size())) return false;
-  const OpdsEntry& row = results[focus];
-  OpdsEntry chosen = row;
-  if (row.type != OpdsEntryType::BOOK) {
-    OpdsParser parser;
+  const legacy_opds::OpdsEntry& row = results[focus];
+  legacy_opds::OpdsEntry chosen = row;
+  if (row.type != legacy_opds::OpdsEntryType::BOOK) {
+    legacy_opds::OpdsParser parser;
     parser.setSummaryLimit(DETAIL_SUMMARY_CHARS);
     {
-      OpdsParserStream stream{parser};
+      legacy_opds::OpdsParserStream stream{parser};
       if (!HttpDownloader::fetchUrl(row.href, stream)) {
         showError(StrId::STR_FETCH_FEED_FAILED, Screen::Results);
         return false;
       }
     }
-    const OpdsEntry* best = nullptr;
+    const legacy_opds::OpdsEntry* best = nullptr;
     const std::string* summary = nullptr;
     for (const auto& edition : parser.getEntries()) {
       if (!summary && !edition.summary.empty()) summary = &edition.summary;
-      if (edition.type != OpdsEntryType::BOOK) continue;
+      if (edition.type != legacy_opds::OpdsEntryType::BOOK) continue;
       if (!best || (edition.size > 0 && (best->size == 0 || edition.size < best->size))) best = &edition;
     }
     if (!best) {
       showError(StrId::STR_GB_NO_EPUB, Screen::Results);
       return false;
     }
-    chosen.type = OpdsEntryType::BOOK;
+    chosen.type = legacy_opds::OpdsEntryType::BOOK;
     chosen.href = UrlUtils::buildUrl(row.href, best->href);
     chosen.size = best->size;
     if (!best->author.empty()) chosen.author = best->author;
@@ -279,7 +279,7 @@ bool GetBooksActivity::fetchCover(const std::string& url) {
   return ok;
 }
 
-std::string GetBooksActivity::destinationFor(const OpdsEntry& entry) const {
+std::string GetBooksActivity::destinationFor(const legacy_opds::OpdsEntry& entry) const {
   std::string path = BOOKS_FOLDER;
   path += '/';
   path += opdsBookFilename(entry.author, entry.title, static_cast<OpdsFilenameFormat>(SETTINGS.opdsFilenameFormat));

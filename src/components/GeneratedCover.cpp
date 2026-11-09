@@ -187,12 +187,12 @@ void drawMotifShape(const GfxRenderer& r, Rng& rng, const int motif, const int x
   }
 }
 
-// Largest serif (capped by cover height) that sets every word whole within
+// Largest title font (capped by cover height) that sets every word whole within
 // `maxLines`; narrow covers step down rather than split "Yellow" across lines.
 int titleFontFor(const GfxRenderer& r, const char* title, const int height, const int width, const int maxLines,
                  const int maxTextHeight) {
-  constexpr int FONTS[] = {NOTOSERIF_18_FONT_ID, NOTOSERIF_16_FONT_ID, NOTOSERIF_14_FONT_ID,
-                           NOTOSERIF_12_FONT_ID, UI_10_FONT_ID,        SMALL_FONT_ID};
+  constexpr int FONTS[] = {NOTOSANS_18_FONT_ID, NOTOSANS_16_FONT_ID, NOTOSANS_14_FONT_ID,
+                           NOTOSANS_12_FONT_ID, UI_10_FONT_ID,        SMALL_FONT_ID};
   constexpr int FONT_COUNT = sizeof(FONTS) / sizeof(FONTS[0]);
   const int first = height >= 280 ? 0 : (height >= 200 ? 1 : 2);
   for (int f = first; f < FONT_COUNT; f++) {
@@ -257,7 +257,7 @@ void draw(const GfxRenderer& r, const int x, const int y, const int w, const int
     drawMotif(r, rng, motif, innerX, y + m + 6, innerW, h - (m + 6) * 2);
     char initial[5];
     initialOf(title, initial, sizeof(initial));
-    const int font = NOTOSERIF_16_FONT_ID;
+    const int font = NOTOSANS_16_FONT_ID;
     const int tw = r.getTextWidth(font, initial, EpdFontFamily::BOLD);
     const int th = r.getLineHeight(font);
     const int plate = std::max(tw, th) + 6;

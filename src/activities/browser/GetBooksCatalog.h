@@ -1,7 +1,7 @@
 #pragma once
 
 #include <I18n.h>
-#include <OpdsParser.h>
+#include <LegacyOpdsParser.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -50,7 +50,7 @@ std::string searchUrl(const Source& source, const std::string& query);
 // True for rows worth listing: downloadable books, and navigation rows that
 // open a single-book feed (Gutenberg's "/ebooks/1342.opds"). Subject/author
 // indexes and similar sub-catalogs are dropped.
-bool isBookRow(const OpdsEntry& entry);
+bool isBookRow(const legacy_opds::OpdsEntry& entry);
 
 // Cover image for a book link from a built-in catalog, derived from the
 // catalogs' stable URL layouts; empty when unknown. Gutenberg's medium cover
