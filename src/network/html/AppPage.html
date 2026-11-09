@@ -81,13 +81,13 @@ iframe { width: 100%; height: calc(100vh - 120px); border: 0; background: transp
 .savebar { position: sticky; bottom: 84px; display: none; justify-content: flex-end; gap: 8px; padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 30px rgba(0,0,0,.12); }
 .savebar.show { display: flex; }
 .cols { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
-.pcard { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.pcard { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .pcard:first-child { border-top: 0; }
 .pcard canvas, .pcard .qrmark { width: 48px; height: 72px; flex: none; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line); }
 .pcard .qrmark { display: grid; place-items: center; font-weight: 700; font-size: 12px; color: var(--muted); }
 .pcard .grow { flex: 1; min-width: 0; }
 .pcard .grow b, .pcard .grow small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pcard .acts { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.pcard .acts { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .field { display: block; margin: 10px 0 0; }
 .field span { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 .field input, .field textarea { width: 100%; }
@@ -107,6 +107,7 @@ textarea { font: inherit; color: var(--text); background: var(--panel-2); border
   nav a.on { background: none; box-shadow: none; }
   main { padding-top: 18px; }
   .cols { grid-template-columns: 1fr; }
+  .pcard .acts { flex: 1 1 100%; justify-content: flex-start; padding-left: 60px; }
   .savebar { bottom: 78px; }
   iframe { height: calc(100vh - 160px); }
 }
