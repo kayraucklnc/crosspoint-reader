@@ -103,6 +103,8 @@ class ActivityManager {
   void goToIncome(BackgroundMode background = BackgroundMode::Off);
   void goToTrains(BackgroundMode background = BackgroundMode::Off, uint16_t route = DEFAULT_SLEEP_ROUTE);
   void goToPlay();
+  // Pocket Cards, opened on card `startIndex` (the one kept through sleep).
+  void goToCards(int startIndex = 0);
   void goToFileBrowser(std::string path = {});
   void goToLibrary();
   void goToBrowser();

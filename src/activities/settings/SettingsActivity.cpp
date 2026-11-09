@@ -37,6 +37,7 @@
 #include "TextSettingsActivity.h"
 #include "WallpaperPickerActivity.h"
 #include "activities/ActivityManager.h"
+#include "activities/cards/CardsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/stats/ReadingStatsActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
@@ -140,6 +141,7 @@ void SettingsActivity::rebuildSettings() {
   // Language leads so a user stuck in an unfamiliar language finds it first.
   addAction(SettingsSection::General, StrId::STR_LANGUAGE, SettingAction::Language);
   addAction(SettingsSection::General, StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts);
+  addAction(SettingsSection::General, StrId::STR_PLAY_CARDS, SettingAction::PocketCards);
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
   addAction(SettingsSection::Reader, StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts);
   if (BoardConfig::hasHomeKey()) {
@@ -435,6 +437,13 @@ void SettingsActivity::toggleSelectedSetting() {
           startActivityForResult(std::move(activity), nullptr);
         } else {
           LOG_ERR("SETTINGS", "OOM: KeyboardLayoutsActivity");
+        }
+        break;
+      case SettingAction::PocketCards:
+        if (auto activity = makeUniqueNoThrow<CardsActivity>(renderer, mappedInput)) {
+          startActivityForResult(std::move(activity), nullptr);
+        } else {
+          LOG_ERR("SETTINGS", "OOM: CardsActivity");
         }
         break;
       case SettingAction::About:

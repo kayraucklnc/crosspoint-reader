@@ -984,6 +984,8 @@ void setup() {
     // Its first paint is a HALF refresh, which cleans the retained frame.
     if (APP_STATE.lastSleepApp == CrossPointState::SLEEP_APP_INCOME) {
       activityManager.goToIncome();
+    } else if (APP_STATE.lastSleepApp == CrossPointState::SLEEP_APP_CARDS) {
+      activityManager.goToCards(APP_STATE.lastSleepRoute);
     } else {
       activityManager.goToTrains();
     }

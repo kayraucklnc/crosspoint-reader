@@ -18,6 +18,7 @@
 #include "StripeClient.h"
 #include "TrainsCache.h"
 #include "WifiCredentialStore.h"
+#include "cards/CardsApi.h"
 #include "util/Timezones.h"
 #include "util/WallpaperStore.h"
 
@@ -273,4 +274,5 @@ void registerWebAppApi(WebServer& server) {
   server.on("/api/wifi/order", HTTP_POST, [s] { handleWifiOrder(*s); });
   server.on("/api/timezones", HTTP_GET, [s] { handleTimezones(*s); });
   server.on("/api/device", HTTP_GET, [s] { handleDevice(*s); });
+  registerCardsApi(server);
 }

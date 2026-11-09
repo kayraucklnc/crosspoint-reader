@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <cstdint>
+#include <utility>
 
 #include "Game2048Art.h"
 #include "SokobanArt.h"
@@ -94,6 +95,21 @@ void wordle(const GfxRenderer& renderer, const int x, const int y, int /*size*/)
                         ty + std::max(2, d - TILE + 2), true);
     }
   }
+}
+
+void cards(const GfxRenderer& renderer, const int x, const int y, int /*size*/) {
+  // An ID card: a QR code on the left, name lines on the right.
+  renderer.drawRoundedRect(x + 2, y + 12, 68, 48, 2, 6, true);
+  constexpr int FINDER = 10;
+  for (const auto [fx, fy] : {std::pair{0, 0}, std::pair{18, 0}, std::pair{0, 18}}) {
+    renderer.drawRect(x + 10 + fx, y + 20 + fy, FINDER, FINDER, 2, true);
+    renderer.fillRect(x + 13 + fx, y + 23 + fy, 4, 4, true);
+  }
+  renderer.fillRect(x + 22, y + 32, 4, 4, true);
+  renderer.fillRect(x + 28, y + 38, 4, 4, true);
+  renderer.fillRect(x + 40, y + 24, 22, 4, true);
+  renderer.fillRect(x + 40, y + 33, 16, 3, true);
+  renderer.fillRect(x + 40, y + 41, 19, 3, true);
 }
 
 }  // namespace play::glyphs

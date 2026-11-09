@@ -14,7 +14,7 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   static constexpr uint8_t SLEEP_AVOID_REPEAT_LOOKBACK = 5;
   // Dashboard left on the panel as a frozen snapshot during the last sleep;
   // waking reopens it.
-  enum SleepApp : uint8_t { SLEEP_APP_NONE = 0, SLEEP_APP_INCOME = 1, SLEEP_APP_TRAINS = 2 };
+  enum SleepApp : uint8_t { SLEEP_APP_NONE = 0, SLEEP_APP_INCOME = 1, SLEEP_APP_TRAINS = 2, SLEEP_APP_CARDS = 3 };
 
   std::string openEpubPath;
   uint32_t sleepLcgCount = 0;
@@ -25,6 +25,7 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   bool lastSleepFromReader = false;
   uint8_t lastSleepApp = SLEEP_APP_NONE;
   // Trains route on that snapshot (origin << 8 | towards); 0xFFFF = default board.
+  // For Cards, the card that was shown.
   uint16_t lastSleepRoute = 0xFFFF;
   // Auto-refresh while asleep (src/autorefresh). A timer wake is only honoured
   // while armed. wakeAt is the planned UTC time, 0 when the clock was unknown.

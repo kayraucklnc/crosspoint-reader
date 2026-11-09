@@ -81,6 +81,21 @@ iframe { width: 100%; height: calc(100vh - 120px); border: 0; background: transp
 .savebar { position: sticky; bottom: 84px; display: none; justify-content: flex-end; gap: 8px; padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 30px rgba(0,0,0,.12); }
 .savebar.show { display: flex; }
 .cols { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+.pcard { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.pcard:first-child { border-top: 0; }
+.pcard canvas, .pcard .qrmark { width: 48px; height: 72px; flex: none; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line); }
+.pcard .qrmark { display: grid; place-items: center; font-weight: 700; font-size: 12px; color: var(--muted); }
+.pcard .grow { flex: 1; min-width: 0; }
+.pcard .grow b, .pcard .grow small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard .acts { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.field { display: block; margin: 10px 0 0; }
+.field span { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.field input, .field textarea { width: 100%; }
+textarea { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; min-height: 84px; resize: vertical; }
+.crop { position: relative; touch-action: none; user-select: none; margin-top: 12px; }
+.crop canvas { display: block; width: 100%; border-radius: 10px; }
+.crop .sel { position: absolute; border: 2px solid var(--accent); box-shadow: 0 0 0 9999px rgba(0,0,0,.45); pointer-events: none; display: none; }
+.preview { display: block; margin: 12px auto 0; max-width: 220px; width: 100%; border: 1px solid var(--line); border-radius: 8px; image-rendering: pixelated; }
 @media (max-width: 760px) {
   nav { position: fixed; bottom: 0; top: auto; left: 0; right: 0; width: auto; height: auto; padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); border-right: 0; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); display: flex; justify-content: space-around; z-index: 10; }
   .brand { display: none; }
@@ -113,9 +128,10 @@ const ICONS = {
   income: 'M4 19V5M4 19h16M7 15l4-4 3 3 5-6',
   trains: 'M7 3h10a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3zM4 11h16M8 18l-2 3M16 18l2 3M8 14.5h.01M16 14.5h.01',
   wifi: 'M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01',
-  settings: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M16 4v4M10 10v4M18 16v4'
+  settings: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M16 4v4M10 10v4M18 16v4',
+  cards: 'M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM6 8h4v4H6zM13 9h5M13 13h3M6 16h12'
 };
-const TABS = [['home', 'Home'], ['files', 'Files'], ['walls', 'Wallpapers'], ['income', 'Income'],
+const TABS = [['home', 'Home'], ['cards', 'Cards'], ['files', 'Files'], ['walls', 'Wallpapers'], ['income', 'Income'],
   ['trains', 'Trains'], ['wifi', 'Wi-Fi'], ['settings', 'Settings']];
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
@@ -158,6 +174,226 @@ async function viewHome(m) {
       ['IP address', s.ip], ['Uptime', fmtUp], ['Serial', s.serial || '—']];
     $('#stats').innerHTML = stats.map(([k, v]) => `<div class="stat"><span>${k}</span><b>${esc(v)}</b></div>`).join('');
   } catch (e) { fail(e); }
+}
+
+// ---------- Pocket Cards ----------
+// Pictures are converted here into exactly what the reader draws: a 1-bit BMP
+// at the screen's portrait size, turned 90° when that makes the content bigger.
+function monoBmp(bits, w, h) {
+  const row = ((w + 31) >> 5) << 2, off = 62, b = new Uint8Array(off + row * h), v = new DataView(b.buffer);
+  b[0] = 66; b[1] = 77;
+  [[2, b.length], [10, off], [14, 40], [18, w], [22, h], [34, row * h], [46, 2], [50, 2]].forEach(([a, x]) => v.setUint32(a, x, true));
+  v.setUint16(26, 1, true); v.setUint16(28, 1, true);
+  b.fill(255, 58, 61);  // palette: 0 black, 1 white
+  for (let y = 0; y < h; y++) {
+    const d = off + (h - 1 - y) * row;
+    for (let x = 0; x < w; x++) if (bits[y * w + x]) b[d + (x >> 3)] |= 0x80 >> (x & 7);
+  }
+  return b;
+}
+// 1 = white. Sharp thresholds (codes and text stay crisp); Photo diffuses the error.
+function toBits(canvas, photo) {
+  const w = canvas.width, h = canvas.height, px = canvas.getContext('2d').getImageData(0, 0, w, h).data;
+  const g = new Float32Array(w * h), out = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) g[i] = (px[i * 4] * 77 + px[i * 4 + 1] * 150 + px[i * 4 + 2] * 29) / 256;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x, white = g[i] >= 128 ? 1 : 0;
+    out[i] = white;
+    if (!photo) continue;
+    const e = g[i] - (white ? 255 : 0);
+    if (x + 1 < w) g[i + 1] += e * 7 / 16;
+    if (y + 1 < h) { if (x) g[i + w - 1] += e * 3 / 16; g[i + w] += e * 5 / 16; if (x + 1 < w) g[i + w + 1] += e / 16; }
+  }
+  return out;
+}
+// The crop (and optional caption) as large as the screen allows below the
+// status band, upright or turned a quarter clockwise, whichever is bigger.
+function composeCard(img, crop, caption, photo, W, H, band) {
+  const pad = 8, aw = W - pad * 2, ah = H - band - pad * 2, capH = caption ? 72 : 0;
+  const fit = (bw, bh) => Math.min(bw / crop.w, (bh - capH) / crop.h);
+  const rotate = fit(ah, aw) > fit(aw, ah);
+  const lw = rotate ? ah : aw, lh = rotate ? aw : ah, s = fit(lw, lh);
+  const L = Object.assign(document.createElement('canvas'), {width: lw, height: lh}), lg = L.getContext('2d');
+  lg.fillStyle = '#fff'; lg.fillRect(0, 0, lw, lh);
+  // Enlarged codes keep hard module edges; reductions and photos are smoothed.
+  lg.imageSmoothingEnabled = photo || s < 1; lg.imageSmoothingQuality = 'high';
+  const dw = crop.w * s, dh = crop.h * s, dx = (lw - dw) / 2, dy = (lh - capH - dh) / 2;
+  lg.drawImage(img, crop.x, crop.y, crop.w, crop.h, dx, dy, dw, dh);
+  if (caption) {
+    lg.fillStyle = '#000'; lg.textAlign = 'center'; lg.textBaseline = 'middle';
+    let size = 44;
+    do { lg.font = '700 ' + size + 'px -apple-system, Helvetica, Arial, sans-serif'; size -= 2; } while (lg.measureText(caption).width > lw - 16 && size > 14);
+    lg.fillText(caption, lw / 2, dy + dh + capH / 2);
+  }
+  const c = Object.assign(document.createElement('canvas'), {width: W, height: H}), g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+  if (rotate) { g.translate(pad + aw, band + pad); g.rotate(Math.PI / 2); } else g.translate(pad, band + pad);
+  g.drawImage(L, 0, 0);
+  return toBits(c, photo);
+}
+// Drag over the picture to select; a tap (or "Whole picture") selects all of it.
+function cropper(box, img, onChange) {
+  const c = Object.assign(document.createElement('canvas'), {width: img.width, height: img.height});
+  c.getContext('2d').drawImage(img, 0, 0);
+  const sel = Object.assign(document.createElement('div'), {className: 'sel'});
+  box.className = 'crop'; box.replaceChildren(c, sel);
+  const whole = {x: 0, y: 0, w: img.width, h: img.height};
+  let start = null, rect = null;
+  const toImg = e => {
+    const r = c.getBoundingClientRect(), k = img.width / r.width;
+    return {x: Math.max(0, Math.min(img.width, (e.clientX - r.left) * k)), y: Math.max(0, Math.min(img.height, (e.clientY - r.top) * k))};
+  };
+  const show = () => {
+    if (!rect) { sel.style.display = 'none'; return; }
+    const k = c.getBoundingClientRect().width / img.width;
+    Object.assign(sel.style, {display: 'block', left: rect.x * k + 'px', top: rect.y * k + 'px', width: rect.w * k + 'px', height: rect.h * k + 'px'});
+  };
+  c.onpointerdown = e => { c.setPointerCapture(e.pointerId); start = toImg(e); rect = null; show(); };
+  c.onpointermove = e => {
+    if (!start) return;
+    const p = toImg(e);
+    rect = {x: Math.min(start.x, p.x), y: Math.min(start.y, p.y), w: Math.abs(p.x - start.x), h: Math.abs(p.y - start.y)};
+    show();
+  };
+  c.onpointerup = () => { start = null; if (rect && (rect.w < 12 || rect.h < 12)) rect = null; show(); onChange(rect || whole); };
+  return () => { rect = null; show(); onChange(whole); };
+}
+const cardField = (id, label, type) => '<label class="field"><span>' + label + '</span><input id="' + id + '" type="' + (type || 'text') + '"></label>';
+const CARD_KINDS = ['Link or text', 'Contact', 'Wi-Fi'];
+const CARD_KIND_FIELDS = [
+  () => '<label class="field"><span>Link or text</span><textarea id="fText" maxlength="1200" placeholder="https://…"></textarea></label>',
+  () => cardField('fName', 'Full name') + cardField('fOrg', 'Company or role') + cardField('fPhone', 'Phone', 'tel') +
+    cardField('fEmail', 'Email', 'email') + cardField('fUrl', 'Website', 'url'),
+  () => cardField('fSsid', 'Network name') + cardField('fPass', 'Password (empty for an open network)')];
+const wifiEsc = s => s.replace(/([\\;,:"])/g, '\\$1');
+const fieldVal = id => ($('#' + id) ? $('#' + id).value.trim() : '');
+// Payload, plus the title and second line it suggests when those are left empty.
+function cardContent(kind) {
+  if (kind === 1) {
+    const name = fieldVal('fName'), parts = name.split(' '), last = parts.length > 1 ? parts.pop() : '';
+    const lines = ['BEGIN:VCARD', 'VERSION:3.0', 'N:' + last + ';' + parts.join(' ') + ';;;', 'FN:' + name];
+    [['ORG', 'fOrg'], ['TEL', 'fPhone'], ['EMAIL', 'fEmail'], ['URL', 'fUrl']].forEach(([k, id]) => fieldVal(id) && lines.push(k + ':' + fieldVal(id)));
+    lines.push('END:VCARD');
+    return {payload: name ? lines.join('\n') : '', title: name, subtitle: fieldVal('fOrg')};
+  }
+  if (kind === 2) {
+    const ssid = fieldVal('fSsid'), pass = $('#fPass').value;
+    const payload = ssid ? 'WIFI:T:' + (pass ? 'WPA' : 'nopass') + ';S:' + wifiEsc(ssid) + ';' + (pass ? 'P:' + wifiEsc(pass) + ';' : '') + ';' : '';
+    return {payload, title: ssid, subtitle: 'Wi-Fi'};
+  }
+  return {payload: fieldVal('fText'), title: '', subtitle: ''};
+}
+async function viewCards(m) {
+  m.innerHTML = `<h1>Pocket Cards</h1><p class="muted" style="margin-top:-10px">Full-screen cards on the reader: Play → Pocket Cards.
+    Left/Right flips between them and Back leaves. A card left on screen stays there while the reader sleeps.</p>
+    <div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" id="addQr">+ QR card</button>
+    <button class="primary" id="addPic">+ Picture</button><input type="file" id="picFile" accept="image/*" hidden></div><div id="editor"></div></div>
+    <div class="card"><h2>Saved cards</h2><div id="clist" class="muted">Loading…</div></div>`;
+  let st = null, device = 'X3', replacing = null;
+  const thumbs = viewCards.thumbs || (viewCards.thumbs = {});
+  const screen = () => (st.screen.width ? [st.screen.width, st.screen.height] : device === 'X4' ? [480, 800] : [528, 792]);
+  const closeEditor = () => { $('#editor').innerHTML = ''; };
+  const cardLabel = c => c.title || (c.type === 'image' ? 'Picture' : c.payload);
+  const cardHint = c => (c.type === 'image' ? 'Picture' : c.subtitle || (c.title ? c.payload : 'QR code'));
+  const cardRow = (c, i, n) => `<div class="pcard" data-i="${i}">${c.type === 'image' ? '<canvas></canvas>' : '<div class="qrmark">QR</div>'}
+    <div class="grow"><b>${esc(cardLabel(c))}</b><small class="muted">${esc(cardHint(c))}</small></div><div class="acts">
+    <button class="icon" data-a="show">Show</button><button class="icon" data-a="edit">Edit</button>
+    <button class="icon" data-a="up" ${i ? '' : 'disabled'}>↑</button><button class="icon" data-a="down" ${i < n - 1 ? '' : 'disabled'}>↓</button>
+    <button class="icon danger" data-a="del">✕</button></div></div>`;
+  const renderList = () => {
+    const box = $('#clist');
+    box.className = st.cards.length ? '' : 'muted';
+    box.innerHTML = st.cards.length ? st.cards.map((c, i) => cardRow(c, i, st.cards.length)).join('') : 'No cards yet. Add a QR code or a picture above.';
+    loadThumbs([...box.querySelectorAll('.pcard')]);
+  };
+  async function loadThumbs(rows) {
+    for (const r of rows) {  // one at a time: the reader serves requests sequentially
+      const c = st.cards[+r.dataset.i], canvas = $('canvas', r);
+      if (!canvas) continue;
+      try {
+        const buf = thumbs[c.id] || (thumbs[c.id] = await (await fetch('/api/cards/image?id=' + c.id)).arrayBuffer());
+        bmpThumb(buf, canvas);
+      } catch { canvas.outerHTML = '<div class="qrmark">?</div>'; }
+      if (!document.body.contains(r)) return;
+    }
+  }
+  const apply = r => { st = r; renderList(); };
+  const qrForm = card => {
+    $('#editor').innerHTML = `<h2 style="margin-top:16px">${card ? 'Edit QR card' : 'New QR card'}</h2><div id="kindSeg"></div>
+      <div id="kindFields"></div><label class="field"><span>Name under the code (optional)</span><input id="cTitle" maxlength="80"></label>
+      <label class="field"><span>Second line (optional)</span><input id="cSub" maxlength="80"></label>
+      <div style="display:flex;gap:8px;margin-top:12px"><button class="primary" id="cSave">Save</button><button id="cCancel">Cancel</button></div>`;
+    let kind = 0;
+    const showKind = k => { kind = k; $('#kindFields').innerHTML = CARD_KIND_FIELDS[k](); };
+    if (card) showKind(0); else { $('#kindSeg').innerHTML = seg('kind', CARD_KINDS, 0); onSeg('kind', showKind); showKind(0); }
+    if (card) { $('#fText').value = card.payload; $('#cTitle').value = card.title; $('#cSub').value = card.subtitle; }
+    $('#cCancel').onclick = closeEditor;
+    $('#cSave').onclick = async () => {
+      const made = cardContent(kind);
+      if (!made.payload) return toast('Fill in what the code should hold', true);
+      const body = {payload: made.payload, title: fieldVal('cTitle') || made.title, subtitle: fieldVal('cSub') || made.subtitle};
+      if (card) body.id = card.id;
+      try { apply(await api('/api/cards', body)); closeEditor(); toast('Saved on the reader'); } catch (e) { fail(e); }
+    };
+  };
+  const picForm = async file => {
+    const card = replacing; replacing = null;
+    let img;
+    try { img = await createImageBitmap(file, {imageOrientation: 'from-image'}); } catch { return toast('Could not open that picture', true); }
+    $('#editor').innerHTML = `<h2 style="margin-top:16px">${card ? 'Replace picture' : 'New picture card'}</h2>
+      <p class="hint muted" style="margin:0">Drag over the picture to crop it (for a boarding pass: the code and your name). A tap uses all of it.</p>
+      <div id="cropBox"></div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center"><button id="cropAll">Whole picture</button>
+      <span id="styleSeg"></span></div><label class="field"><span>Caption under the picture (optional)</span><input id="pCap" maxlength="60"></label>
+      <canvas class="preview" id="pPrev"></canvas>
+      <div style="display:flex;gap:8px;margin-top:12px"><button class="primary" id="pSave">Save to reader</button><button id="pCancel">Cancel</button></div>`;
+    let crop = {x: 0, y: 0, w: img.width, h: img.height}, photo = 0, bits = null;
+    const [W, H] = screen();
+    const preview = () => {
+      bits = composeCard(img, crop, fieldVal('pCap'), photo, W, H, st.screen.band);
+      const p = $('#pPrev'), g = (p.width = W, p.height = H, p.getContext('2d')), out = g.createImageData(W, H);
+      for (let i = 0; i < W * H; i++) { const v = bits[i] ? 255 : 0; out.data.fill(v, i * 4, i * 4 + 3); out.data[i * 4 + 3] = 255; }
+      g.putImageData(out, 0, 0);
+    };
+    const reset = cropper($('#cropBox'), img, r => { crop = r; preview(); });
+    $('#styleSeg').innerHTML = seg('pStyle', ['Sharp (codes, text)', 'Photo'], 0);
+    onSeg('pStyle', v => { photo = v; preview(); });
+    $('#cropAll').onclick = reset;
+    $('#pCap').oninput = preview;
+    $('#pCancel').onclick = closeEditor;
+    $('#pSave').onclick = async () => {
+      const fd = new FormData();
+      fd.append('file', new File([monoBmp(bits, W, H)], 'card.bmp'));
+      const q = card ? 'id=' + card.id : 'title=' + encodeURIComponent(fieldVal('pCap') || file.name.replace(/\.[^.]*$/, ''));
+      try {
+        $('#pSave').disabled = true;
+        const r = await fetch('/api/cards/image?' + q, {method: 'POST', body: fd});
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || 'Upload failed');
+        if (card) delete thumbs[card.id];
+        apply(data); closeEditor(); toast('Saved on the reader');
+      } catch (e) { $('#pSave').disabled = false; fail(e); }
+    };
+    preview();
+  };
+  $('#addQr').onclick = () => qrForm(null);
+  $('#addPic').onclick = () => { replacing = null; $('#picFile').click(); };
+  $('#picFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) picForm(f); };
+  $('#clist').onclick = async e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const i = +b.closest('.pcard').dataset.i, c = st.cards[i], a = b.dataset.a;
+    try {
+      if (a === 'show') { await api('/api/cards/show', {id: c.id}); toast('Showing on the reader'); }
+      else if (a === 'edit') { if (c.type === 'image') { replacing = c; $('#picFile').click(); } else { qrForm(c); scrollTo(0, 0); } }
+      else if (a === 'del') { if (confirm('Delete "' + cardLabel(c) + '"?')) { delete thumbs[c.id]; apply(await api('/api/cards/delete', {id: c.id})); } }
+      else {
+        const ids = st.cards.map(x => x.id), j = a === 'up' ? i - 1 : i + 1;
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        apply(await api('/api/cards/order', {ids}));
+      }
+    } catch (err) { fail(err); }
+  };
+  api('/api/status').then(s => { device = s.device; }, () => {});
+  try { apply(await api('/api/cards')); } catch (e) { fail(e); }
 }
 
 // ---------- Files (full file manager, embedded) ----------
@@ -433,7 +669,7 @@ async function viewSettings(m) {
 }
 
 // ---------- Router ----------
-const VIEWS = {home: viewHome, files: viewFiles, walls: viewWalls, income: viewIncome, trains: viewTrains, wifi: viewWifi, settings: viewSettings};
+const VIEWS = {home: viewHome, cards: viewCards, files: viewFiles, walls: viewWalls, income: viewIncome, trains: viewTrains, wifi: viewWifi, settings: viewSettings};
 $('#nav').insertAdjacentHTML('beforeend', TABS.map(([k, n]) => `<a href="#${k}" data-k="${k}">${svg(k)}<span>${n}</span></a>`).join(''));
 function route() {
   const k = location.hash.slice(1) || (location.pathname === '/settings' ? 'settings' : 'home');

@@ -19,6 +19,7 @@
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
+#include "cards/CardsActivity.h"
 #include "components/HeaderBackTapTarget.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
@@ -307,6 +308,10 @@ void ActivityManager::goToTrains(const BackgroundMode background, const uint16_t
 
 void ActivityManager::goToPlay() { replaceActivity(std::make_unique<PlayMenuActivity>(renderer, mappedInput)); }
 
+void ActivityManager::goToCards(const int startIndex) {
+  replaceActivity(std::make_unique<CardsActivity>(renderer, mappedInput, startIndex));
+}
+
 void ActivityManager::goToSettings(const SettingsSection openSection) {
   replaceActivity(std::make_unique<SettingsListActivity>(renderer, mappedInput, openSection));
 }
@@ -436,6 +441,7 @@ uint8_t ActivityManager::sleepSnapshotApp() const {
   }
   if (currentActivity->name == "Income") return CrossPointState::SLEEP_APP_INCOME;
   if (currentActivity->name == "Trains") return CrossPointState::SLEEP_APP_TRAINS;
+  if (currentActivity->name == "Cards") return CrossPointState::SLEEP_APP_CARDS;
   return CrossPointState::SLEEP_APP_NONE;
 }
 

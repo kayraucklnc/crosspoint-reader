@@ -66,7 +66,7 @@ bool CrossPointState::fromJson(JsonVariantConst doc) {
   readerActivityLoadCount = doc["readerActivityLoadCount"] | static_cast<uint8_t>(0);
   lastSleepFromReader = doc["lastSleepFromReader"] | false;
   lastSleepApp = doc["lastSleepApp"] | static_cast<uint8_t>(SLEEP_APP_NONE);
-  if (lastSleepApp > SLEEP_APP_TRAINS) lastSleepApp = SLEEP_APP_NONE;
+  if (lastSleepApp > SLEEP_APP_CARDS) lastSleepApp = SLEEP_APP_NONE;
   showBootScreen = doc["showBootScreen"] | true;
   lastSleepRoute = doc["lastSleepRoute"] | static_cast<uint16_t>(0xFFFF);
   autoRefreshArmed = doc["autoRefreshArmed"] | false;

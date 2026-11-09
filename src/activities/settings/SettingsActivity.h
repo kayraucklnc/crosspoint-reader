@@ -38,6 +38,7 @@ enum class SettingAction {
   OpdsCatalog,
   ChooseWallpaper,
   ReadingStats,
+  PocketCards,
 };
 
 struct SettingInfo {

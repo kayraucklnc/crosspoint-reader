@@ -21,6 +21,7 @@
 #include "TriviaActivity.h"
 #include "VoxelActivity.h"
 #include "WordleActivity.h"
+#include "activities/cards/CardsActivity.h"
 #include "activities/xkcd/XkcdActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -39,8 +40,10 @@ void jokersIcon(const GfxRenderer& renderer, const int x, const int y, int /*siz
   jokers::art::drawMenuIcon(renderer, x, y);
 }
 
-// Menu order, grouped: arcade, puzzles, cards, creative. One row per game.
+// Menu order: Pocket Cards first, then games grouped arcade, puzzles, cards,
+// creative. One row per entry.
 constexpr PlayMenuActivity::Entry GAMES[] = {
+    {StrId::STR_PLAY_CARDS, StrId::STR_PLAY_CARDS_DESC, &glyphs::cards, &make<CardsActivity>},
     {StrId::STR_PLAY_SNAKE, StrId::STR_PLAY_SNAKE_DESC, &glyphs::snake, &make<SnakeActivity>},
     {StrId::STR_PLAY_2048, StrId::STR_PLAY_2048_DESC, &glyphs::game2048, &make<Game2048Activity>},
     {StrId::STR_PLAY_MINES, StrId::STR_PLAY_MINES_DESC, &MinesweeperActivity::drawMenuIcon, &make<MinesweeperActivity>},
