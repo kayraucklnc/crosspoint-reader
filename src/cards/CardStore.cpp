@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Utf8.h>
 #include <esp_random.h>
 
 #include <algorithm>
@@ -14,13 +15,14 @@ namespace {
 constexpr const char* DIR = "/.crosspoint/cards";
 constexpr const char* LIST_PATH = "/.crosspoint/cards/cards.json";
 constexpr const char* TMP_PATH = "/.crosspoint/cards/cards.json.tmp";
+constexpr const char* BAD_PATH = "/.crosspoint/cards/cards.json.bad";
 constexpr size_t ID_LEN = 8;
 
 const char* typeName(const CardType type) { return type == CardType::Image ? "image" : "qr"; }
 
 std::string clipped(const char* text, const size_t maxLen) {
   std::string out = text ? text : "";
-  if (out.size() > maxLen) out.resize(maxLen);
+  if (out.size() > maxLen) out.resize(utf8SafeTruncateBuffer(out.c_str(), static_cast<int>(maxLen)));
   return out;
 }
 
@@ -48,12 +50,25 @@ void CardStore::ensureLoaded() {
 void CardStore::load() {
   std::lock_guard<std::mutex> lock(mutex);
   loaded = true;
+  readFailed = false;
   cardList.clear();
-  if (!Storage.exists(LIST_PATH)) return;
-  const String raw = Storage.readFile(LIST_PATH);
+  // A power cut between replacing and renaming leaves only the new list.
+  const char* path = Storage.exists(LIST_PATH) ? LIST_PATH : TMP_PATH;
+  if (!Storage.exists(path)) return;
+  const String raw = Storage.readFile(path);
   JsonDocument doc;
-  if (deserializeJson(doc, raw.c_str()) != DeserializationError::Ok) {
-    LOG_ERR("CARDS", "Ignoring unreadable %s", LIST_PATH);
+  const DeserializationError error = deserializeJson(doc, raw.c_str());
+  if (error == DeserializationError::NoMemory) {
+    // Not the file's fault: try again next time, and keep it safe until then.
+    LOG_ERR("CARDS", "No memory to read %s", path);
+    loaded = false;
+    readFailed = true;
+    return;
+  }
+  if (error) {
+    LOG_ERR("CARDS", "Unreadable %s, kept as %s", path, BAD_PATH);
+    Storage.remove(BAD_PATH);
+    Storage.rename(path, BAD_PATH);
     return;
   }
   for (JsonObjectConst item : doc["cards"].as<JsonArrayConst>()) {
@@ -144,6 +159,9 @@ bool CardStore::remove(const std::string& id) {
 bool CardStore::reorder(const std::vector<std::string>& ids) {
   std::lock_guard<std::mutex> lock(mutex);
   if (ids.size() != cardList.size()) return false;
+  for (size_t i = 0; i < ids.size(); i++) {
+    if (std::find(ids.begin(), ids.begin() + i, ids[i]) != ids.begin() + i) return false;  // listed twice
+  }
   std::vector<Card> ordered;
   ordered.reserve(cardList.size());
   for (const auto& id : ids) {
@@ -201,9 +219,10 @@ bool CardStore::validId(const std::string& id) {
          });
 }
 
-// Written to a temp file and renamed over the list, so a power cut mid-write
-// keeps the previous cards.
+// Written to a temp file and moved over the list, so a power cut mid-write
+// keeps the previous cards (load() falls back to the temp file if needed).
 bool CardStore::saveLocked() const {
+  if (readFailed) return false;
   JsonDocument doc;
   doc["v"] = 1;
   JsonArray list = doc["cards"].to<JsonArray>();
@@ -216,13 +235,15 @@ bool CardStore::saveLocked() const {
     if (!card.payload.empty()) item["payload"] = card.payload;
   }
   String out;
-  serializeJson(doc, out);
+  if (doc.overflowed() || serializeJson(doc, out) == 0 || out.isEmpty()) {
+    LOG_ERR("CARDS", "No memory to save the cards");
+    return false;
+  }
   if (!Storage.ensureDirectoryExists(DIR) || !Storage.writeFile(TMP_PATH, out)) {
     LOG_ERR("CARDS", "Failed to write %s", TMP_PATH);
     return false;
   }
-  Storage.remove(LIST_PATH);
-  if (!Storage.rename(TMP_PATH, LIST_PATH)) {
+  if (!Storage.replaceFile(TMP_PATH, LIST_PATH)) {
     LOG_ERR("CARDS", "Failed to replace %s", LIST_PATH);
     return false;
   }

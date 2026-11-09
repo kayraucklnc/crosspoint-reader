@@ -175,8 +175,7 @@ void handleImageDone(WebServer& server) {
     }
   }
   const std::string path = cards::CardStore::imagePath(id);
-  Storage.remove(path.c_str());
-  if (!Storage.rename(UPLOAD_TMP, path.c_str())) {
+  if (!Storage.replaceFile(UPLOAD_TMP, path.c_str())) {
     if (!replace) CARD_STORE.remove(id);
     return sendError(server, 500, "Could not store the picture");
   }

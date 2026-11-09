@@ -261,7 +261,7 @@ function cropper(box, img, onChange) {
 const cardField = (id, label, type) => '<label class="field"><span>' + label + '</span><input id="' + id + '" type="' + (type || 'text') + '"></label>';
 const CARD_KINDS = ['Link or text', 'Contact', 'Wi-Fi'];
 const CARD_KIND_FIELDS = [
-  () => '<label class="field"><span>Link or text</span><textarea id="fText" maxlength="1200" placeholder="https://…"></textarea></label>',
+  () => '<label class="field"><span>Link or text</span><textarea id="fText" maxlength="600" placeholder="https://…"></textarea></label>',
   () => cardField('fName', 'Full name') + cardField('fOrg', 'Company or role') + cardField('fPhone', 'Phone', 'tel') +
     cardField('fEmail', 'Email', 'email') + cardField('fUrl', 'Website', 'url'),
   () => cardField('fSsid', 'Network name') + cardField('fPass', 'Password (empty for an open network)')];

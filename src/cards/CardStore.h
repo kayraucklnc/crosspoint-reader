@@ -25,8 +25,10 @@ struct Card {
 };
 
 constexpr size_t MAX_CARDS = 24;
-constexpr size_t MAX_PAYLOAD = 1200;
-constexpr size_t MAX_TITLE = 80;
+// QR text in bytes. Larger codes need more stack to encode than the render
+// task can spare (and get hard to scan on a 6" panel anyway).
+constexpr size_t MAX_PAYLOAD = 600;
+constexpr size_t MAX_TITLE = 160;  // bytes: room for 80 non-Latin characters
 // Top strip kept clear of card content for the lock indicator and page count.
 constexpr int STATUS_BAND = 22;
 
@@ -75,6 +77,8 @@ class CardStore {
   std::vector<Card> cardList;
   uint32_t rev = 0;
   bool loaded = false;
+  // cards.json could not be read for lack of memory: never write over it.
+  bool readFailed = false;
   int pendingShow = -1;
   int width = 0;
   int height = 0;

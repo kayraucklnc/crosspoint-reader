@@ -36,6 +36,7 @@ class CardsActivity final : public Activity {
   int page = 0;
   int lastDrawnPage = -1;
   uint32_t seenRevision = 0;
+  int lastPageCount = 1;  // pages when the store was last seen, to tell the editor page
   bool hotspotFailed = false;
 
   int pageCount() const;

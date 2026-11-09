@@ -17,7 +17,8 @@ void CardsActivity::onEnter() {
   CARD_STORE.setScreenSize(renderer.getScreenWidth(), renderer.getScreenHeight());
   CARD_STORE.takeShowRequest();  // drop a request left from an earlier session
   seenRevision = CARD_STORE.revision();
-  page = std::clamp(page, 0, pageCount() - 1);
+  lastPageCount = pageCount();
+  page = std::clamp(page, 0, lastPageCount - 1);
   lastDrawnPage = -1;
   requestUpdate();
 }
@@ -54,8 +55,10 @@ void CardsActivity::loop() {
   // Edits from the phone: redraw, keeping the page on a card that still exists.
   const uint32_t revision = CARD_STORE.revision();
   if (revision != seenRevision) {
+    const bool wasOnEditor = page >= lastPageCount - 1;
     seenRevision = revision;
-    page = std::min(page, pageCount() - 1);
+    lastPageCount = pageCount();
+    page = wasOnEditor ? lastPageCount - 1 : std::min(page, lastPageCount - 1);
     lastDrawnPage = -1;
     requestUpdate();
   }

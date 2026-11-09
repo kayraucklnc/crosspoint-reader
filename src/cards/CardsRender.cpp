@@ -21,6 +21,17 @@ namespace {
 constexpr int MARGIN = 16;
 constexpr int TEXT_GAP = 14;
 constexpr int QR_MAX_VERSION = 40;
+// Data codewords per version at error-correction level M (ISO/IEC 18004).
+// The QR library does not check capacity itself: text past it overruns its buffers.
+constexpr uint16_t QR_M_DATA_BYTES[QR_MAX_VERSION] = {
+    16,  28,  44,  64,  86,  108, 124, 154, 182, 216, 254, 290, 334, 365, 415, 453, 507, 563, 627, 669,
+    714, 782, 860, 914, 1000, 1062, 1128, 1193, 1267, 1373, 1455, 1541, 1631, 1725, 1812, 1914, 1992, 2102, 2216, 2334};
+
+// Byte mode is the library's widest encoding, so fitting it fits any mode it picks.
+bool fitsVersion(const size_t length, const int version) {
+  const size_t countBits = version <= 9 ? 8 : 16;
+  return 4 + countBits + 8 * length <= static_cast<size_t>(QR_M_DATA_BYTES[version - 1]) * 8;
+}
 // Light-coloured modules the scanner needs around the code, in modules.
 constexpr int QUIET_MODULES = 2;
 constexpr int TITLE_FONT = NOTOSANS_18_FONT_ID;
@@ -131,11 +142,12 @@ int drawQr(const GfxRenderer& renderer, const std::string& text, const int cente
   // The smallest version that holds the text gives the biggest modules.
   // Medium error correction survives a scuffed or reflective screen.
   for (int version = 1; version <= QR_MAX_VERSION; version++) {
+    if (!fitsVersion(text.size(), version)) continue;
     const uint16_t bufferSize = qrcode_getBufferSize(version);
     auto modules = makeUniqueNoThrow<uint8_t[]>(bufferSize);
     if (!modules) return 0;
     QRCode qr;
-    if (qrcode_initText(&qr, modules.get(), version, ECC_MEDIUM, text.c_str()) != 0) continue;
+    if (qrcode_initText(&qr, modules.get(), version, ECC_MEDIUM, text.c_str()) != 0) return 0;
     const int px = maxSide / (qr.size + QUIET_MODULES * 2);
     if (px < 1) return 0;
     const int side = qr.size * px;
